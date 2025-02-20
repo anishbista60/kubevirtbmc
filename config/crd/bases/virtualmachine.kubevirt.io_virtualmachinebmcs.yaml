@@ -39,28 +39,61 @@ spec:
           spec:
             description: VirtualMachineBMCSpec defines the desired state of VirtualMachineBMC
             properties:
-              password:
-                description: The credential part of the IPMI service
-                type: string
-              username:
-                description: To authenticate who the user is.
-                type: string
-              vmName:
-                description: The actual virtual machine that this BMC controls
-                type: string
-              vmNamespace:
-                description: The namespace where the virtual machine is in
-                type: string
+              authSecret:
+                description: |-
+                  A Secret object reference for the IPMI/Redfish authentication.
+                  It should contain a pair of username and password.
+                properties:
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+              virtualMachine:
+                description: The VM this emulated BMC manages
+                properties:
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
             required:
-            - vmName
-            - vmNamespace
+            - authSecret
+            - virtualMachine
             type: object
           status:
             description: VirtualMachineBMCStatus defines the observed state of VirtualMachineBMC
             properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of an object's state
+                items:
+                  description: Condition represents the state of the VirtualMachineBMC
+                    at a certain point
+                  properties:
+                    lastUpdateTime:
+                      description: Last time the condition was updated
+                      format: date-time
+                      type: string
+                    status:
+                      description: Status of the condition, one of True or False
+                      type: string
+                    type:
+                      description: Type of condition
+                      type: string
+                  required:
+                  - lastUpdateTime
+                  - status
+                  - type
+                  type: object
+                type: array
               ready:
-                description: The indicator that shows the readiness of the IPMI service
-                  for the virtual machine
                 type: boolean
               serviceIP:
                 description: The listen IP address for the IPMI service.

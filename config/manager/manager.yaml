@@ -70,7 +70,7 @@ spec:
         - /manager
         args:
         - --leader-elect
-        image: controller:latest
+        image: anish60/virtbmc-controller:latest
         name: manager
         securityContext:
           allowPrivilegeEscalation: false
@@ -94,6 +94,7 @@ spec:
         resources:
           limits:
             cpu: 500m
+
             memory: 128Mi
           requests:
             cpu: 10m

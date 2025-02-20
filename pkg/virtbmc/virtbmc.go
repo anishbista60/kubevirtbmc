@@ -10,6 +10,7 @@ import (
 	"kubevirt.io/kubevirtbmc/pkg/ipmi"
 	"kubevirt.io/kubevirtbmc/pkg/redfish"
 	"kubevirt.io/kubevirtbmc/pkg/resourcemanager"
+	"kubevirt.io/kubevirtbmc/pkg/secret"
 )
 
 type VMNameKey struct{}
@@ -21,6 +22,7 @@ type Options struct {
 	Address        string
 	IPMIPort       int
 	RedfishPort    int
+	SecretRef      string
 }
 
 type KubeVirtClientInterface interface {
@@ -32,12 +34,13 @@ type VirtBMC struct {
 	context     context.Context
 	address     string
 	ipmiPort    int
+	authSecret  string
 	redfishPort int
 	vmNamespace string
 	vmName      string
 
-	kvClient KubeVirtClientInterface
-
+	kvClient        KubeVirtClientInterface
+	secretManager   *secret.SecretManager
 	resourceManager *resourcemanager.VirtualMachineResourceManager
 
 	ipmiSimulator   *ipmi.Simulator
@@ -47,25 +50,52 @@ type VirtBMC struct {
 func NewVirtBMC(ctx context.Context, options Options, inCluster bool) (*VirtBMC, error) {
 	kvClient := NewK8sClient(options)
 	resourceManager := resourcemanager.NewVirtualMachineResourceManager(ctx, kvClient)
+
+	// Create the SecretManager
+	secretManager, err := secret.NewSecretManager(ctx, options.SecretRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secret manager: %v", err)
+	}
+
 	return &VirtBMC{
-		context:         ctx,
-		address:         options.Address,
-		ipmiPort:        options.IPMIPort,
-		redfishPort:     options.RedfishPort,
-		vmNamespace:     ctx.Value(VMNamespaceKey{}).(string),
-		vmName:          ctx.Value(VMNameKey{}).(string),
+		context:     ctx,
+		address:     options.Address,
+		ipmiPort:    options.IPMIPort,
+		redfishPort: options.RedfishPort,
+		authSecret:  options.SecretRef,
+		vmNamespace: ctx.Value(VMNamespaceKey{}).(string),
+		vmName:      ctx.Value(VMNameKey{}).(string),
+
 		kvClient:        kvClient,
+		secretManager:   secretManager,
 		resourceManager: resourceManager,
+		// Pass the secretManager to the IPMI simulator instead of just the secretRef
 		ipmiSimulator:   ipmi.NewSimulator(options.Address, options.IPMIPort, resourceManager),
 		redfishEmulator: redfish.NewEmulator(ctx, options.RedfishPort, resourceManager),
 	}, nil
 }
 
 func (b *VirtBMC) Run() error {
-	logrus.Info("Initializing the the VirtBMC agent...")
+	logrus.Info("Initializing the VirtBMC agent...")
 
+	// Initialize the resource manager
 	if err := b.resourceManager.Initialize(b.vmNamespace, b.vmName); err != nil {
 		return fmt.Errorf("unable to initialize the resource manager: %v", err)
+	}
+
+	// Initialize and run the secret manager
+	if err := b.secretManager.Initialize(); err != nil {
+		return fmt.Errorf("unable to initialize the secret manager: %v", err)
+	}
+
+	if err := b.secretManager.Run(); err != nil {
+		return fmt.Errorf("unable to run the secret manager: %v", err)
+	}
+
+	if b.authSecret != "" {
+		logrus.Infof("Authentication enabled using secret: %s", b.authSecret)
+	} else {
+		logrus.Info("Authentication disabled, no secret reference provided")
 	}
 
 	// Start the IPMI simulator
@@ -84,6 +114,7 @@ func (b *VirtBMC) Run() error {
 	logrus.Info("Gracefully shutting down the VirtBMC agent...")
 	b.ipmiSimulator.Stop()
 	b.redfishEmulator.Stop()
+	b.secretManager.Stop()
 
 	return nil
 }

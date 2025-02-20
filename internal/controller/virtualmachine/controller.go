@@ -66,6 +66,7 @@ func (v *VirtualMachineReconciler) handleFinalizer(ctx context.Context, vm *kube
 
 func (v *VirtualMachineReconciler) constructVirtualMachineBMCFromVirtualMachine(vm *kubevirtv1.VirtualMachine) *virtualmachinev1.VirtualMachineBMC {
 	name := fmt.Sprintf("%s-%s", vm.Namespace, vm.Name)
+	secretName := name + "-secret"
 
 	virtualMachineBMC := &virtualmachinev1.VirtualMachineBMC{
 		ObjectMeta: metav1.ObjectMeta{
@@ -73,10 +74,14 @@ func (v *VirtualMachineReconciler) constructVirtualMachineBMCFromVirtualMachine(
 			Namespace: ctlvirtualmachinebmc.VirtualMachineBMCNamespace,
 		},
 		Spec: virtualmachinev1.VirtualMachineBMCSpec{
-			Username:                ctlvirtualmachinebmc.DefaultUsername,
-			Password:                ctlvirtualmachinebmc.DefaultPassword,
-			VirtualMachineNamespace: vm.Namespace,
-			VirtualMachineName:      vm.Name,
+			VirtualMachine: virtualmachinev1.NamespacedName{
+				Namespace: vm.Namespace,
+				Name:      vm.Name,
+			},
+			AuthSecret: virtualmachinev1.NamespacedName{
+				Namespace: vm.Namespace,
+				Name:      secretName,
+			},
 		},
 	}
 

@@ -23,6 +23,7 @@ type ComputerSystemAdapter struct {
 
 func (a *ComputerSystemAdapter) GetComputerSystem() *server.ComputerSystemV1220ComputerSystem {
 	return a.computerSystem
+
 }
 
 func (a *ComputerSystemAdapter) GetID() string {

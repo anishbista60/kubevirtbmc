@@ -10,7 +10,22 @@ metadata:
   name: virtualmachinebmc-sample
   namespace: kubevirtbmc-system
 spec:
-  username: admin
-  password: password
-  vmNamespace: default
-  vmName: test-vm
+  # Reference to the Secret containing the credentials
+  authSecret:
+    namespace: kubevirtbmc-system
+    name: bmc-cred
+
+  # The VirtualMachine this BMC manages
+  virtualMachine:
+    namespace: default
+    name: test-vm
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bmc-cred
+  namespace: kubevirtbmc-system
+type: Opaque
+data:
+  username: YWRtaW4=  
+  password: cGFzc3dvcmQ= 

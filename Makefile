@@ -7,11 +7,11 @@ DIRTY :=
 ifneq ($(shell git status --porcelain --untracked-files=no),)
 DIRTY := -dirty
 endif
-VERSION := $(VERSION)$(DIRTY)
+VERSION := latest
 # Export the tag to be used in the e2e tests
 export TAG = $(VERSION)
 
-REPO ?= starbops
+REPO ?= anish60
 
 # Image URL to use all building/pushing image targets
 MGR_IMG ?= $(REPO)/virtbmc-controller:$(TAG)
@@ -161,8 +161,9 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker images with the manager and the agent respectively.
-	$(CONTAINER_TOOL) build -t $(MGR_IMG) --build-arg LINKFLAGS=$(LINKFLAGS) .
-	$(CONTAINER_TOOL) build -t $(AGT_IMG) --build-arg LINKFLAGS=$(LINKFLAGS) --build-arg TARGETARCH=amd64 -f Dockerfile.virtbmc .
+	$(CONTAINER_TOOL) build -t $(MGR_IMG) --build-arg LINKFLAGS=$(LINKFLAGS) --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 .
+	$(CONTAINER_TOOL) build -t $(AGT_IMG) --build-arg LINKFLAGS=$(LINKFLAGS) --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 -f Dockerfile.virtbmc .
+
 ifeq ($(PUSH),true)
 	$(CONTAINER_TOOL) push $(MGR_IMG)
 	$(CONTAINER_TOOL) push $(AGT_IMG)

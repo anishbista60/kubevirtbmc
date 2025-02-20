@@ -44,15 +44,22 @@ var _ webhook.Defaulter = &VirtualMachineBMC{}
 func (r *VirtualMachineBMC) Default() {
 	virtualmachinebmclog.Info("default", "name", r.Name)
 
-	// TODO(user): fill in your defaulting logic.
-	if r.Spec.Username == "" {
-		r.Spec.Username = "admin"
+	// Set default namespace for the virtual machine
+	if r.Spec.VirtualMachine.Namespace == "" {
+		r.Spec.VirtualMachine.Namespace = "default"
 	}
-	if r.Spec.Password == "" {
-		r.Spec.Password = "password"
+
+	// If credentials reference is not set, create a default one
+	if r.Spec.AuthSecret.Name == "" {
+		r.Spec.AuthSecret = NamespacedName{
+			Name:      r.Name + "-credentials",
+			Namespace: r.Namespace,
+		}
 	}
-	if r.Spec.VirtualMachineNamespace == "" {
-		r.Spec.VirtualMachineNamespace = "default"
+
+	// If namespace is not set in CredentialsRef, use the VirtualMachineBMC's namespace
+	if r.Spec.AuthSecret.Namespace == "" {
+		r.Spec.AuthSecret.Namespace = r.Namespace
 	}
 }
 

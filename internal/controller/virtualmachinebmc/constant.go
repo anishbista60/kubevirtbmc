@@ -1,10 +1,8 @@
 package virtualmachinebmc
 
 const (
-	DefaultUsername            = "admin"
-	DefaultPassword            = "password"
 	virtBMCContainerName       = "virtbmc"
-	VirtBMCImageName           = "starbops/virtbmc"
+	VirtBMCImageName           = "anish60/virtbmc"
 	ipmiPort                   = 10623
 	redfishPort                = 10080
 	IPMISvcPort                = 623

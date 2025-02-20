@@ -81,23 +81,31 @@ func GetTokenFromSessionID(sessionID string) (TokenInfo, bool) {
 }
 
 func AuthMiddleware(next http.Handler) http.Handler {
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check for token-based authentication first
 		token := r.Header.Get("X-Auth-Token")
-		if token == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		if token != "" {
+			ts.rwMutex.RLock()
+			_, exists := ts.store[token]
+			ts.rwMutex.RUnlock()
+
+			if exists {
+				// Token is valid, proceed
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		// If token auth failed or wasn't provided, try basic auth
+		username, password, hasBasicAuth := r.BasicAuth()
+		if hasBasicAuth && ValidateBasicAuth(username, password) {
+			// Basic auth is valid, proceed
+			next.ServeHTTP(w, r)
 			return
 		}
 
-		ts.rwMutex.RLock()
-		_, exists := ts.store[token]
-		ts.rwMutex.RUnlock()
-
-		if !exists {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		next.ServeHTTP(w, r)
+		// Neither token nor basic auth succeeded
+		w.Header().Set("WWW-Authenticate", `Basic realm="Redfish API"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	})
 }

@@ -23,24 +23,32 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// NamespacedName contains the namespace and name of the depicted resource
+type NamespacedName struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
 // VirtualMachineBMCSpec defines the desired state of VirtualMachineBMC
 type VirtualMachineBMCSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// A Secret object reference for the IPMI/Redfish authentication.
+	// It should contain a pair of username and password.
+	AuthSecret NamespacedName `json:"authSecret"`
 
-	// To authenticate who the user is.
-	// +optional
-	Username string `json:"username,omitempty"`
+	// The VM this emulated BMC manages
+	VirtualMachine NamespacedName `json:"virtualMachine"`
+}
 
-	// The credential part of the IPMI service
-	// +optional
-	Password string `json:"password,omitempty"`
+// Condition represents the state of the VirtualMachineBMC at a certain point
+type Condition struct {
+	// Type of condition
+	Type string `json:"type"`
 
-	// The namespace where the virtual machine is in
-	VirtualMachineNamespace string `json:"vmNamespace"`
+	// Status of the condition, one of True or False
+	Status string `json:"status"`
 
-	// The actual virtual machine that this BMC controls
-	VirtualMachineName string `json:"vmName"`
+	// Last time the condition was updated
+	LastUpdateTime metav1.Time `json:"lastUpdateTime"`
 }
 
 // VirtualMachineBMCStatus defines the observed state of VirtualMachineBMC
@@ -51,8 +59,10 @@ type VirtualMachineBMCStatus struct {
 	// The listen IP address for the IPMI service.
 	ServiceIP string `json:"serviceIP"`
 
-	// The indicator that shows the readiness of the IPMI service for the virtual machine
 	Ready bool `json:"ready"`
+
+	// Conditions represent the latest available observations of an object's state
+	Conditions []Condition `json:"conditions,omitempty"`
 }
 
 //+kubebuilder:object:root=true

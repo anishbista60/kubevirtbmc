@@ -49,6 +49,13 @@ func main() {
 				Usage:       "listen on `REDFISH PORT`",
 				Destination: &options.RedfishPort,
 			},
+			&cli.StringFlag{
+				Name:        "secret-ref",
+				Aliases:     []string{"s"},
+				Value:       "",
+				Usage:       "reference to the Secret for authentication",
+				Destination: &options.SecretRef,
+			},
 			&cli.BoolFlag{
 				Name:    "version",
 				Aliases: []string{"v"},

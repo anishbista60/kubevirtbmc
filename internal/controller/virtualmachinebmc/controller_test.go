@@ -37,6 +37,7 @@ var _ = Describe("VirtualMachineBMC Controller", func() {
 		testPassword                   = "test-password"
 		testVMName                     = "test-vm"
 		testVMNamespace                = "default"
+		testSecretName                 = "test-bmc-credentials"
 
 		timeout  = time.Second * 10
 		duration = time.Second * 10
@@ -53,6 +54,20 @@ var _ = Describe("VirtualMachineBMC Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
 
+			// Create the BMC credentials Secret
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testSecretName,
+					Namespace: testVirtualMachineBMCNamespace,
+				},
+				Type: corev1.SecretTypeOpaque,
+				StringData: map[string]string{
+					"username": testUsername,
+					"password": testPassword,
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).Should(Succeed())
+
 			By("Creating a new VirtualMachineBMC")
 			virtualMachineBMC := &virtualmachinev1.VirtualMachineBMC{
 				ObjectMeta: metav1.ObjectMeta{
@@ -64,10 +79,14 @@ var _ = Describe("VirtualMachineBMC Controller", func() {
 					Kind:       "VirtualMachineBMC",
 				},
 				Spec: virtualmachinev1.VirtualMachineBMCSpec{
-					Username:                testUsername,
-					Password:                testPassword,
-					VirtualMachineNamespace: testVMNamespace,
-					VirtualMachineName:      testVMName,
+					AuthSecret: virtualmachinev1.NamespacedName{
+						Name:      testSecretName,
+						Namespace: testVMNamespace,
+					},
+					VirtualMachine: virtualmachinev1.NamespacedName{
+						Name:      testVMName,
+						Namespace: testVMNamespace,
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, virtualMachineBMC)).To(Succeed())
