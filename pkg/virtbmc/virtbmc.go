@@ -69,7 +69,6 @@ func NewVirtBMC(ctx context.Context, options Options, inCluster bool) (*VirtBMC,
 		kvClient:        kvClient,
 		secretManager:   secretManager,
 		resourceManager: resourceManager,
-		// Pass the secretManager to the IPMI simulator instead of just the secretRef
 		ipmiSimulator:   ipmi.NewSimulator(options.Address, options.IPMIPort, resourceManager),
 		redfishEmulator: redfish.NewEmulator(ctx, options.RedfishPort, resourceManager),
 	}, nil
@@ -88,14 +87,11 @@ func (b *VirtBMC) Run() error {
 		return fmt.Errorf("unable to initialize the secret manager: %v", err)
 	}
 
+	// Set the global secret manager
+	secret.SetSecretManager(b.secretManager)
+
 	if err := b.secretManager.Run(); err != nil {
 		return fmt.Errorf("unable to run the secret manager: %v", err)
-	}
-
-	if b.authSecret != "" {
-		logrus.Infof("Authentication enabled using secret: %s", b.authSecret)
-	} else {
-		logrus.Info("Authentication disabled, no secret reference provided")
 	}
 
 	// Start the IPMI simulator

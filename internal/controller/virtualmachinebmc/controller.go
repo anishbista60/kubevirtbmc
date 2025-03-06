@@ -54,25 +54,11 @@ func (r *VirtualMachineBMCReconciler) constructPodFromVirtualMachineBMC(virtualM
 	name := fmt.Sprintf("%s-virtbmc", virtualMachineBMC.Name)
 	secretRef := fmt.Sprintf("%s/%s", virtualMachineBMC.Spec.AuthSecret.Namespace, virtualMachineBMC.Spec.AuthSecret.Name)
 
-	// Get the current secret's ResourceVersion to track changes
-	secretKey := client.ObjectKey{
-		Namespace: virtualMachineBMC.Spec.AuthSecret.Namespace,
-		Name:      virtualMachineBMC.Spec.AuthSecret.Name,
-	}
-	var secret corev1.Secret
-	secretVersion := ""
-	if err := r.Get(context.Background(), secretKey, &secret); err == nil {
-		secretVersion = secret.ResourceVersion
-	}
-
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: map[string]string{
 				VirtualMachineBMCNameLabel: virtualMachineBMC.Name,
 				VMNameLabel:                virtualMachineBMC.Spec.VirtualMachine.Name,
-			},
-			Annotations: map[string]string{
-				"lastKnownSecretVersion": secretVersion,
 			},
 			Name:      name,
 			Namespace: VirtualMachineBMCNamespace,
@@ -186,7 +172,6 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	var secret corev1.Secret
 	secretExists := true
-	var secretVersion string
 	if err := r.Get(ctx, secretKey, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
 			secretExists = false
@@ -195,8 +180,6 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			log.Error(err, "Error fetching secret", "secret", secretKey)
 			return ctrl.Result{}, err
 		}
-	} else {
-		secretVersion = secret.ResourceVersion
 	}
 
 	// Update the VirtualMachineBMC status based on the existence of the secret
@@ -225,55 +208,19 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	log.Info("Successfully updated VirtualMachineBMC status", "vmBMC", virtualMachineBMC.Name)
 
-	// Check if pod already exists and if it needs to be refreshed due to secret changes
-	podName := fmt.Sprintf("%s-virtbmc", virtualMachineBMC.Name)
-	existingPod := &corev1.Pod{}
-	err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: VirtualMachineBMCNamespace}, existingPod)
-
-	if err == nil {
-		// Pod exists, check if it needs to be refreshed
-		shouldRefresh, reason, refreshErr := r.shouldRefreshPod(ctx, existingPod, &virtualMachineBMC, secretVersion)
-		if refreshErr != nil {
-			return ctrl.Result{}, refreshErr
-		}
-
-		if shouldRefresh {
-			log.Info("Pod refresh required", "reason", reason)
-
-			if err := r.Delete(ctx, existingPod, client.GracePeriodSeconds(0)); err != nil {
-				log.Error(err, "unable to delete Pod for VirtualMachineBMC", "pod", existingPod)
-				return ctrl.Result{}, err
-			}
-			// Return and let the next reconcile create the new pod
-			return ctrl.Result{Requeue: true}, nil
-		}
-
-		log.V(1).Info("Pod for VirtualMachineBMC exists and is up-to-date", "pod", podName)
-	} else if !apierrors.IsNotFound(err) {
-		// Error getting pod that isn't "not found"
-		log.Error(err, "Error checking for existing pod", "pod", podName)
+	// Prepare the virtBMC Pod
+	pod := r.constructPodFromVirtualMachineBMC(&virtualMachineBMC)
+	if err := ctrl.SetControllerReference(&virtualMachineBMC, pod, r.Scheme); err != nil {
 		return ctrl.Result{}, err
-	} else {
-		// Pod doesn't exist, create it
-		pod := r.constructPodFromVirtualMachineBMC(&virtualMachineBMC)
-
-		// Add annotation for secret version tracking
-		if pod.Annotations == nil {
-			pod.Annotations = make(map[string]string)
-		}
-		pod.Annotations["lastKnownSecretVersion"] = secretVersion
-
-		if err := ctrl.SetControllerReference(&virtualMachineBMC, pod, r.Scheme); err != nil {
-			return ctrl.Result{}, err
-		}
-
-		// Create the virtBMC Pod on the cluster
-		if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
-			log.Error(err, "unable to create Pod for VirtualMachineBMC", "pod", pod)
-			return ctrl.Result{}, err
-		}
-		log.V(1).Info("created Pod for VirtualMachineBMC", "pod", pod)
 	}
+
+	// Create the virtBMC Pod on the cluster
+	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
+		log.Error(err, "unable to create Pod for VirtualMachineBMC", "pod", pod)
+		return ctrl.Result{}, err
+	}
+
+	log.V(1).Info("created Pod for VirtualMachineBMC", "pod", pod)
 
 	// Prepare the virtBMC Service
 	svc := r.constructServiceFromVirtualMachineBMC(&virtualMachineBMC)
@@ -286,6 +233,7 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		log.Error(err, "unable to create Service for VirtualMachineBMC", "svc", svc)
 		return ctrl.Result{}, err
 	}
+
 	log.V(1).Info("created Service for VirtualMachineBMC", "svc", svc)
 
 	return ctrl.Result{}, nil
@@ -357,49 +305,4 @@ func (r *VirtualMachineBMCReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}),
 		).
 		Complete(r)
-}
-
-// shouldRefreshPod determines if a pod needs to be refreshed based on secret changes
-func (r *VirtualMachineBMCReconciler) shouldRefreshPod(ctx context.Context, existingPod *corev1.Pod, vmBMC *virtualmachinev1.VirtualMachineBMC, secretVersion string) (bool, string, error) {
-	log := log.FromContext(ctx)
-
-	// Generate the new secret reference string
-	newSecretRef := fmt.Sprintf("%s/%s", vmBMC.Spec.AuthSecret.Namespace, vmBMC.Spec.AuthSecret.Name)
-
-	// Get current secret reference from pod
-	currentSecretRef := ""
-	for _, container := range existingPod.Spec.Containers {
-		if container.Name == virtBMCContainerName {
-			for i, arg := range container.Args {
-				if arg == "--secret-ref" && i+1 < len(container.Args) {
-					currentSecretRef = container.Args[i+1]
-					break
-				}
-			}
-			break
-		}
-	}
-
-	// Check if the secret reference itself has changed
-	secretRefChanged := currentSecretRef != newSecretRef
-
-	// Check if the secret data has changed by looking at resource version
-	secretDataChanged := false
-	if !secretRefChanged && secretVersion != "" {
-		// Get the resource version annotation we  have set previously
-		lastKnownSecretVersion, hasAnnotation := existingPod.Annotations["lastKnownSecretVersion"]
-		if !hasAnnotation || lastKnownSecretVersion != secretVersion {
-			secretDataChanged = true
-			log.Info("Secret data has changed", "oldVersion", lastKnownSecretVersion, "newVersion", secretVersion)
-		}
-	}
-
-	reason := ""
-	if secretRefChanged {
-		reason = "Secret reference changed"
-	} else if secretDataChanged {
-		reason = "Secret data changed"
-	}
-
-	return secretRefChanged || secretDataChanged, reason, nil
 }

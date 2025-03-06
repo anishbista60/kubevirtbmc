@@ -7,6 +7,7 @@ import (
 
 	"kubevirt.io/kubevirtbmc/pkg/generated/redfish/server"
 	"kubevirt.io/kubevirtbmc/pkg/resourcemanager"
+	"kubevirt.io/kubevirtbmc/pkg/secret"
 	"kubevirt.io/kubevirtbmc/pkg/session"
 )
 
@@ -26,8 +27,12 @@ func (h *handler) Authenticate(username, password *string) (string, string, erro
 		return id, token, fmt.Errorf("username and password must be provided")
 	}
 
+	U, P := secret.GetCredentials()
 	if *username != defaultUserName || *password != defaultPassword {
-		return id, token, fmt.Errorf("invalid username or password")
+		// Check with stored credentials
+		if *username != U || *password != P {
+			return id, token, fmt.Errorf("invalid username or password")
+		}
 	}
 
 	id = uuid.New().String()

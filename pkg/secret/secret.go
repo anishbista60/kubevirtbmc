@@ -31,6 +31,21 @@ type SecretManager struct {
 	secretInformer  cache.SharedIndexInformer
 }
 
+var secretManager *SecretManager
+
+// SetSecretManager assigns the global secret manager instance.
+func SetSecretManager(sm *SecretManager) {
+	secretManager = sm
+}
+
+// GetCredentials returns the current username and password using the global secret manager.
+func GetCredentials() (string, string) {
+	if secretManager == nil {
+		return "", ""
+	}
+	return secretManager.GetCredentials()
+}
+
 // NewSecretManager creates a new SecretManager with the given secret reference
 func NewSecretManager(ctx context.Context, secretRef string) (*SecretManager, error) {
 	// Parse secret reference in format "namespace/name"
@@ -70,10 +85,7 @@ func (sm *SecretManager) Initialize() error {
 		logrus.Info("No secret reference provided, IPMI authentication disabled")
 		return nil
 	}
-
-	if err := sm.fetchInitialCredentials(); err != nil {
-		return fmt.Errorf("failed to fetch initial credentials: %v", err)
-	}
+	sm.fetchInitialCredentials()
 
 	return sm.setupSecretWatcher()
 }
@@ -99,7 +111,6 @@ func (sm *SecretManager) setupSecretWatcher() error {
 			sm.authSecret.Password = ""
 		},
 	})
-
 	return nil
 }
 
@@ -134,7 +145,8 @@ func (sm *SecretManager) fetchInitialCredentials() error {
 		metav1.GetOptions{},
 	)
 	if err != nil {
-		return fmt.Errorf("failed to get authentication secret: %v", err)
+		logrus.Warnf("Authentication secret %s/%s not found: %v", sm.secretNamespace, sm.secretName, err)
+		return nil
 	}
 	sm.updateCredentials(secret)
 	return nil
@@ -154,8 +166,8 @@ func (sm *SecretManager) Run() error {
 }
 
 // GetCredentials returns the current credentials
-func (sm *SecretManager) GetCredentials() *AuthCredentials {
-	return sm.authSecret
+func (sm *SecretManager) GetCredentials() (string, string) {
+	return sm.authSecret.Username, sm.authSecret.Password
 }
 
 // Stop stops the secret manager
