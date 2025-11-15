@@ -1,166 +1,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-vm-watcher
-rules:
-- apiGroups:
-  - kubevirt.io
-  resources:
-  - virtualmachines
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: kube-rbac-proxy
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-metrics-reader
-rules:
-- nonResourceURLs:
-  - "/metrics"
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: kube-rbac-proxy
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-proxy-role
-rules:
-- apiGroups:
-  - authentication.k8s.io
-  resources:
-  - tokenreviews
-  verbs:
-  - create
-- apiGroups:
-  - authorization.k8s.io
-  resources:
-  - subjectaccessreviews
-  verbs:
-  - create
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-pod-svc-manager
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - services
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-vmbmc-manager
-rules:
-- apiGroups:
-  - virtualmachine.kubevirt.io
-  resources:
-  - virtualmachinebmcs
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - virtualmachine.kubevirt.io
-  resources:
-  - virtualmachinebmcs/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - virtualmachine.kubevirt.io
-  resources:
-  - virtualmachinebmcs/status
-  verbs:
-  - get
-  - patch
-  - update
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: agent-rbac
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-vm-manager
-rules:
-- apiGroups:
-  - kubevirt.io
-  resources:
-  - virtualmachines
-  verbs:
-  - get
-  - list
-  - watch
-  - update
-  - patch
-- apiGroups:
-  - kubevirt.io
-  resources:
-  - virtualmachineinstances
-  verbs:
-  - get
-  - list
-  - watch
-  - delete
----
-apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/part-of: kubevirtbmc
-  name: {{ include "chart.name" . }}-leader-election-role
+  name: kubevirtbmc-leader-election-role
   namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups:
@@ -196,104 +39,248 @@ rules:
   - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: ClusterRole
 metadata:
-  labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-watch-vms
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "chart.name" . }}-vm-watcher
-subjects:
-- kind: ServiceAccount
-  name: {{ include "chart.serviceAccountName" . }}-manager
-  namespace: {{ .Release.Namespace }}
+  name: kubevirtbmc-manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachines
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - virtualmachine.kubevirt.io
+  resources:
+  - virtualmachinebmcs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - virtualmachine.kubevirt.io
+  resources:
+  - virtualmachinebmcs/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - virtualmachine.kubevirt.io
+  resources:
+  - virtualmachinebmcs/status
+  verbs:
+  - get
+  - patch
+  - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: ClusterRole
 metadata:
-  labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: kube-rbac-proxy
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-proxy-rolebinding
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "chart.name" . }}-proxy-role
-subjects:
-- kind: ServiceAccount
-  name: {{ include "chart.serviceAccountName" . }}-manager
-  namespace: {{ .Release.Namespace }}
+  name: kubevirtbmc-metrics-auth-role
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: ClusterRole
 metadata:
-  labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-manage-pods-svcs
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "chart.name" . }}-pod-svc-manager
-subjects:
-- kind: ServiceAccount
-  name: {{ include "chart.serviceAccountName" . }}-manager
-  namespace: {{ .Release.Namespace }}
+  name: kubevirtbmc-metrics-reader
+rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: ClusterRole
 metadata:
   labels:
+    app.kubernetes.io/component: virtbmc-rbac
+    app.kubernetes.io/created-by: kubevirtbmc
+    app.kubernetes.io/instance: virtbmc-role
     {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-manage-vmbmcs
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "chart.name" . }}-vmbmc-manager
-subjects:
-- kind: ServiceAccount
-  name: {{ include "chart.serviceAccountName" . }}-manager
-  namespace: {{ .Release.Namespace }}
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/part-of: kubevirtbmc
+  name: kubevirtbmc-virtbmc-role
+rules:
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachines
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  verbs:
+  - get
+  - list
+  - watch
+  - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: ClusterRole
 metadata:
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: agent-rbac
-    app.kubernetes.io/part-of: {{ include "chart.name" . }}
-  name: {{ include "chart.name" . }}-manage-vm
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "chart.name" . }}-vm-manager
-subjects:
-- kind: ServiceAccount
-  name: {{ include "chart.serviceAccountName" . }}-virtbmc
-  namespace: {{ .Release.Namespace }}
+  name: kubevirtbmc-virtualmachinebmc-admin-role
+rules:
+- apiGroups:
+  - virtualmachine.kubevirt.io
+  resources:
+  - virtualmachinebmcs
+  verbs:
+  - '*'
+- apiGroups:
+  - virtualmachine.kubevirt.io
+  resources:
+  - virtualmachinebmcs/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+  name: kubevirtbmc-virtualmachinebmc-editor-role
+rules:
+- apiGroups:
+  - virtualmachine.kubevirt.io
+  resources:
+  - virtualmachinebmcs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - virtualmachine.kubevirt.io
+  resources:
+  - virtualmachinebmcs/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+  name: kubevirtbmc-virtualmachinebmc-viewer-role
+rules:
+- apiGroups:
+  - virtualmachine.kubevirt.io
+  resources:
+  - virtualmachinebmcs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - virtualmachine.kubevirt.io
+  resources:
+  - virtualmachinebmcs/status
+  verbs:
+  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/part-of: kubevirtbmc
-  name: {{ include "chart.name" . }}-leader-election-rolebinding
+  name: kubevirtbmc-leader-election-rolebinding
   namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "chart.name" . }}-leader-election-role
+  name: kubevirtbmc-leader-election-role
 subjects:
 - kind: ServiceAccount
-  name: {{ include "chart.serviceAccountName" . }}-manager
+  name: kubevirtbmc-controller-manager
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+  name: kubevirtbmc-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubevirtbmc-manager-role
+subjects:
+- kind: ServiceAccount
+  name: kubevirtbmc-controller-manager
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubevirtbmc-metrics-auth-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubevirtbmc-metrics-auth-role
+subjects:
+- kind: ServiceAccount
+  name: kubevirtbmc-controller-manager
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: virtbmc-rbac
+    app.kubernetes.io/created-by: kubevirtbmc
+    app.kubernetes.io/instance: virtbmc-rolebinding
+    {{- include "chart.labels" . | nindent 4 }}
+    app.kubernetes.io/name: clusterrolebinding
+    app.kubernetes.io/part-of: kubevirtbmc
+  name: kubevirtbmc-virtbmc-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubevirtbmc-virtbmc-role
+subjects:
+- kind: ServiceAccount
+  name: kubevirtbmc-virtbmc
   namespace: {{ .Release.Namespace }}
