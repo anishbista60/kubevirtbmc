@@ -35,6 +35,9 @@ type VirtualMachineBMCSpec struct {
 
 	// Reference to the Secret containing IPMI/Redfish credentials.
 	AuthSecretRef *corev1.LocalObjectReference `json:"authSecretRef,omitempty"`
+
+	// No. of replicas of virtBMC
+	Instance *int32 `json:"instance,omitempty"`
 }
 
 // VirtualMachineBMCStatus defines the observed state of VirtualMachineBMC.

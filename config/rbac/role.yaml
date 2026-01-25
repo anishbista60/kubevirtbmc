@@ -27,6 +27,18 @@ rules:
   - list
   - watch
 - apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - bmc.kubevirt.io
   resources:
   - virtualmachinebmcs
@@ -46,7 +58,6 @@ rules:
   - update
 - apiGroups:
   - bmc.kubevirt.io
-  - virtualmachine.kubevirt.io
   resources:
   - virtualmachinebmcs/status
   verbs:
@@ -89,12 +100,4 @@ rules:
   - list
   - patch
   - update
-  - watch
-- apiGroups:
-  - virtualmachine.kubevirt.io
-  resources:
-  - virtualmachinebmcs
-  verbs:
-  - get
-  - list
   - watch

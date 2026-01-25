@@ -8,9 +8,11 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	kubescheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -167,19 +169,30 @@ func (e *agentTestEnv) ensureBMCExists(ctx context.Context, k8sClient client.Cli
 	return k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: agentBMCName}, bmc)
 }
 
-func waitForAgentPodReady(ctx context.Context, k8sClient client.Client, namespace, podName string) {
+func waitForAgentPodReady(ctx context.Context, k8sClient client.Client, namespace, deploymentName string) {
 	Eventually(func() bool {
-		var pod corev1.Pod
-		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: podName}, &pod); err != nil {
+		var deployment appsv1.Deployment
+		if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: deploymentName}, &deployment); err != nil {
 			return false
 		}
-		for _, c := range pod.Status.Conditions {
-			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
-				return true
+
+		var podList corev1.PodList
+		if err := k8sClient.List(ctx, &podList, &client.ListOptions{
+			Namespace:     namespace,
+			LabelSelector: labels.SelectorFromSet(deployment.Spec.Selector.MatchLabels),
+		}); err != nil {
+			return false
+		}
+
+		for _, pod := range podList.Items {
+			for _, c := range pod.Status.Conditions {
+				if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+					return true
+				}
 			}
 		}
 		return false
-	}, agentTestTimeout, agentTestInterval).Should(BeTrue(), "agent pod %q should become ready", podName)
+	}, agentTestTimeout, agentTestInterval).Should(BeTrue(), "agent deployment %q should have a ready pod", deploymentName)
 }
 
 func CreateRedfishClientPod(ctx context.Context, clientset *kubernetes.Clientset, namespace string) error {

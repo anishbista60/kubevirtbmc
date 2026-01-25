@@ -108,7 +108,7 @@ var _ = BeforeSuite(func() {
 	By("waiting for webhook registration to propagate")
 	time.Sleep(util.WebhookRegistrationDelay)
 
-	By("ensuring test VM, Secret and VirtualMachineBMC exist and waiting for VMI and agent pod")
+	By("ensuring test VM, Secret and VirtualMachineBMC exist and waiting for VMI and agent deployment")
 	Expect(util.EnsureTestVMSecretBMC(ctx, k8sClient, agentNamespace, agentTestTimeout, agentTestInterval)).To(Succeed())
 })
 

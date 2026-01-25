@@ -6,6 +6,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,14 +25,18 @@ const (
 	E2ESecretName              = "bmc-credentials-secret"
 	E2EBMCName                 = "test-bmc"
 	E2ENamespace               = "default"
-	E2EAgentPodName            = E2EVMName + "-virtbmc"
+	E2EAgentDeploymentName     = E2EVMName + "-virtbmc"
 	E2EWebhookServiceName      = "kubevirtbmc-webhook-service"
 	E2EWebhookServiceNamespace = "kubevirtbmc-system"
 	WebhookRegistrationDelay   = 10 * time.Second
 )
 
 func AgentPodKey(namespace string) types.NamespacedName {
-	return types.NamespacedName{Name: E2EAgentPodName, Namespace: namespace}
+	return types.NamespacedName{Name: E2EAgentDeploymentName, Namespace: namespace}
+}
+
+func AgentDeploymentKey(namespace string) types.NamespacedName {
+	return types.NamespacedName{Name: E2EAgentDeploymentName, Namespace: namespace}
 }
 
 func BMCKey(namespace string) types.NamespacedName {
@@ -53,35 +58,108 @@ func HasBMCCondition(ctx context.Context, k8sClient client.Client, namespace, co
 	}
 }
 
+func agentDeployment(ctx context.Context, k8sClient client.Client, namespace string) (*appsv1.Deployment, error) {
+	deployment := &appsv1.Deployment{}
+	if err := k8sClient.Get(ctx, AgentDeploymentKey(namespace), deployment); err != nil {
+		return nil, err
+	}
+	return deployment, nil
+}
+
+func agentPods(ctx context.Context, k8sClient client.Client, namespace string) ([]corev1.Pod, error) {
+	deployment, err := agentDeployment(ctx, k8sClient, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	var podList corev1.PodList
+	if err := k8sClient.List(ctx, &podList, &client.ListOptions{
+		Namespace:     namespace,
+		LabelSelector: labels.SelectorFromSet(deployment.Spec.Selector.MatchLabels),
+	}); err != nil {
+		return nil, err
+	}
+
+	return podList.Items, nil
+}
+
+func DeploymentExists(ctx context.Context, k8sClient client.Client, namespace string) func() bool {
+	return func() bool {
+		deployment := &appsv1.Deployment{}
+		return k8sClient.Get(ctx, AgentDeploymentKey(namespace), deployment) == nil
+	}
+}
+
+func DeploymentNotFound(ctx context.Context, k8sClient client.Client, namespace string) func() bool {
+	return func() bool {
+		deployment := &appsv1.Deployment{}
+		return apierrors.IsNotFound(k8sClient.Get(ctx, AgentDeploymentKey(namespace), deployment))
+	}
+}
+
 func PodExists(ctx context.Context, k8sClient client.Client, namespace string) func() bool {
 	return func() bool {
-		pod := &corev1.Pod{}
-		return k8sClient.Get(ctx, AgentPodKey(namespace), pod) == nil
+		pods, err := agentPods(ctx, k8sClient, namespace)
+		return err == nil && len(pods) > 0
 	}
 }
 
 func PodNotFound(ctx context.Context, k8sClient client.Client, namespace string) func() bool {
 	return func() bool {
-		pod := &corev1.Pod{}
-		return apierrors.IsNotFound(k8sClient.Get(ctx, AgentPodKey(namespace), pod))
+		pods, err := agentPods(ctx, k8sClient, namespace)
+		return apierrors.IsNotFound(err) || len(pods) == 0
 	}
 }
 
 func PodRunningAndReady(ctx context.Context, k8sClient client.Client, namespace string) func() bool {
 	return func() bool {
-		pod := &corev1.Pod{}
-		if err := k8sClient.Get(ctx, AgentPodKey(namespace), pod); err != nil {
+		pods, err := agentPods(ctx, k8sClient, namespace)
+		if err != nil {
 			return false
 		}
-		if pod.Status.Phase != corev1.PodRunning {
-			return false
-		}
-		for _, cond := range pod.Status.Conditions {
-			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
-				return true
+		for _, pod := range pods {
+			if pod.Status.Phase != corev1.PodRunning {
+				continue
+			}
+			for _, cond := range pod.Status.Conditions {
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					return true
+				}
 			}
 		}
 		return false
+	}
+}
+
+func DeploymentReadyReplicas(ctx context.Context, k8sClient client.Client, namespace string, replicas int32) func() bool {
+	return func() bool {
+		deployment, err := agentDeployment(ctx, k8sClient, namespace)
+		if err != nil {
+			return false
+		}
+		return deployment.Spec.Replicas != nil &&
+			*deployment.Spec.Replicas == replicas &&
+			deployment.Status.ReadyReplicas == replicas
+	}
+}
+
+func DeploymentSpecReplicas(ctx context.Context, k8sClient client.Client, namespace string, replicas int32) func() bool {
+	return func() bool {
+		deployment, err := agentDeployment(ctx, k8sClient, namespace)
+		if err != nil {
+			return false
+		}
+		return deployment.Spec.Replicas != nil && *deployment.Spec.Replicas == replicas
+	}
+}
+
+func DeploymentTemplateAnnotation(ctx context.Context, k8sClient client.Client, namespace, key string) func() string {
+	return func() string {
+		deployment, err := agentDeployment(ctx, k8sClient, namespace)
+		if err != nil || deployment.Spec.Template.Annotations == nil {
+			return ""
+		}
+		return deployment.Spec.Template.Annotations[key]
 	}
 }
 
@@ -212,7 +290,8 @@ func EnsureTestVMSecretBMC(ctx context.Context, k8sClient client.Client, namespa
 
 	By("waiting for VMI to reach Running and agent pod to become ready")
 	Eventually(VMIRunning(ctx, k8sClient, E2EVMName, namespace), timeout, interval).Should(BeTrue(), "VMI %s/%s should reach Running", namespace, E2EVMName)
-	Eventually(PodRunningAndReady(ctx, k8sClient, namespace), timeout, interval).Should(BeTrue(), "agent pod %s/%s should become ready", namespace, E2EAgentPodName)
+	Eventually(DeploymentExists(ctx, k8sClient, namespace), timeout, interval).Should(BeTrue(), "agent deployment %s/%s should exist", namespace, E2EAgentDeploymentName)
+	Eventually(PodRunningAndReady(ctx, k8sClient, namespace), timeout, interval).Should(BeTrue(), "agent pod for deployment %s/%s should become ready", namespace, E2EAgentDeploymentName)
 	return nil
 }
 

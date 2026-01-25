@@ -37,7 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
-	ctlservice "kubevirt.io/kubevirtbmc/internal/controller/service"
 	ctlvirtualmachinebmc "kubevirt.io/kubevirtbmc/internal/controller/virtualmachinebmc"
 	webhookvirtualmachinebmc "kubevirt.io/kubevirtbmc/internal/webhook/bmc/v1beta1"
 
@@ -151,13 +150,6 @@ func main() {
 		AgentImageTag:  agentImageTag,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VirtualMachineBMC")
-		os.Exit(1)
-	}
-	if err = (&ctlservice.ServiceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Service")
 		os.Exit(1)
 	}
 	if err = webhookvirtualmachinebmc.SetupVirtualMachineBMCWebhookWithManager(mgr); err != nil {
