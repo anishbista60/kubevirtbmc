@@ -118,8 +118,13 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
-	cancel()
+	if cancel != nil {
+		cancel()
+	}
 	By("tearing down the test environment")
+	if testEnv == nil || cfg == nil {
+		return
+	}
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })

@@ -69,6 +69,10 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              instance:
+                description: No. of replicas of virtBMC
+                format: int32
+                type: integer
               virtualMachineRef:
                 description: Reference to the VM to manage.
                 properties:

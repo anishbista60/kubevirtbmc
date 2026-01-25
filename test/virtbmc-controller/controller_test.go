@@ -6,6 +6,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -26,7 +27,7 @@ const (
 )
 
 var (
-	serviceAccountName = util.E2EAgentPodName
+	serviceAccountName = util.E2EAgentDeploymentName
 	roleBindingName    = util.E2EVMName + "-virtbmc-rolebinding"
 )
 
@@ -134,17 +135,17 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			}, timeout, interval).Should(BeTrue(), "RoleBinding should be created")
 		})
 
-		It("should create a ready agent Pod", func() {
-			By("verifying the agent Pod exists")
-			Eventually(util.PodExists(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "agent Pod should be created")
-			By("verifying the agent Pod is Running")
-			Eventually(util.PodRunningAndReady(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "agent Pod should become Running and Ready")
+		It("should create an agent Deployment with a ready replica", func() {
+			By("verifying the agent Deployment exists")
+			Eventually(util.DeploymentExists(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "agent Deployment should be created")
+			By("verifying the agent Deployment reports one ready replica")
+			Eventually(util.DeploymentReadyReplicas(ctx, k8sClient, util.E2ENamespace, 1), timeout, interval).Should(BeTrue(), "agent Deployment should become ready")
 		})
 
 		It("should create an agent Service", func() {
 			Eventually(func() bool {
 				svc := &corev1.Service{}
-				return k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), svc) == nil
+				return k8sClient.Get(ctx, util.AgentDeploymentKey(util.E2ENamespace), svc) == nil
 			}, timeout, interval).Should(BeTrue(), "agent Service should be created")
 		})
 
@@ -172,7 +173,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 
 	Context("when the VirtualMachine is deleted", func() {
 
-		It("should delete the agent Pod and set VirtualMachineAvailable=False", func() {
+		It("should delete the agent Deployment and Service and set VirtualMachineAvailable=False", func() {
 			By("deleting the VirtualMachine")
 
 			vm := &kubevirtv1.VirtualMachine{}
@@ -187,9 +188,15 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			Eventually(util.VMNotFound(ctx, k8sClient, util.E2EVMName, util.E2ENamespace), vmDeletionTimeout, interval).Should(BeTrue(),
 				"VirtualMachine should be fully deleted")
 
-			By("verifying the agent Pod is removed")
-			Eventually(util.PodNotFound(ctx, k8sClient, util.E2ENamespace), vmDeletionTimeout, interval).Should(BeTrue(),
-				"agent Pod should be deleted when VM is gone")
+			By("verifying the agent Deployment is removed")
+			Eventually(util.DeploymentNotFound(ctx, k8sClient, util.E2ENamespace), vmDeletionTimeout, interval).Should(BeTrue(),
+				"agent Deployment should be deleted when VM is gone")
+
+			By("verifying the agent Service is removed")
+			Eventually(func() bool {
+				svc := &corev1.Service{}
+				return errors.IsNotFound(k8sClient.Get(ctx, util.AgentDeploymentKey(util.E2ENamespace), svc))
+			}, vmDeletionTimeout, interval).Should(BeTrue(), "agent Service should be deleted when VM is gone")
 
 			By("verifying VirtualMachineAvailable=False with reason VirtualMachineNotFound")
 			Eventually(
@@ -199,6 +206,23 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 					"VirtualMachineNotFound"),
 				vmDeletionTimeout, interval,
 			).Should(BeTrue())
+
+			By("verifying Ready=False and ClusterIP is cleared")
+			Eventually(func() bool {
+				var bmc bmcv1.VirtualMachineBMC
+				if err := k8sClient.Get(ctx, util.BMCKey(util.E2ENamespace), &bmc); err != nil {
+					return false
+				}
+				if bmc.Status.ClusterIP != "" {
+					return false
+				}
+				for _, c := range bmc.Status.Conditions {
+					if c.Type == bmcv1.ConditionReady && c.Status == metav1.ConditionFalse && c.Reason == "PrerequisitesMissing" {
+						return true
+					}
+				}
+				return false
+			}, vmDeletionTimeout, interval).Should(BeTrue())
 		})
 
 		It("should restore VirtualMachineAvailable=True when VM is re-created", func() {
@@ -219,31 +243,54 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 				timeout, interval,
 			).Should(BeTrue())
 
-			By("verifying the agent Pod is re-created and running")
-			Eventually(util.PodRunningAndReady(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "agent Pod should become Running and Ready")
+			By("verifying the agent Deployment is re-created and running")
+			Eventually(util.DeploymentReadyReplicas(ctx, k8sClient, util.E2ENamespace, 1), timeout, interval).Should(BeTrue(), "agent Deployment should become ready")
 
 		})
 	})
 
 	Context("when the Secret is deleted", func() {
-		It("should delete the agent Pod and set SecretAvailable=False", func() {
+		It("should delete the agent Deployment and Service and set SecretAvailable=False", func() {
 			By("deleting the Secret")
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: util.E2ESecretName, Namespace: util.E2ENamespace}, secret)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
 
-			By("verifying the agent Pod is removed")
-			Eventually(util.PodNotFound(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(),
-				"agent Pod should be deleted when Secret is gone")
+			By("verifying the agent Deployment is removed")
+			Eventually(util.DeploymentNotFound(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(),
+				"agent Deployment should be deleted when Secret is gone")
+
+			By("verifying the agent Service is removed")
+			Eventually(func() bool {
+				svc := &corev1.Service{}
+				return errors.IsNotFound(k8sClient.Get(ctx, util.AgentDeploymentKey(util.E2ENamespace), svc))
+			}, timeout, interval).Should(BeTrue(), "agent Service should be deleted when Secret is gone")
 
 			By("verifying SecretAvailable=False with reason SecretNotFound")
 			Eventually(
 				util.HasBMCCondition(ctx, k8sClient, util.E2ENamespace, bmcv1.ConditionSecretAvailable, metav1.ConditionFalse, "SecretNotFound"),
 				timeout, interval,
 			).Should(BeTrue())
+
+			By("verifying Ready=False and ClusterIP is cleared")
+			Eventually(func() bool {
+				var bmc bmcv1.VirtualMachineBMC
+				if err := k8sClient.Get(ctx, util.BMCKey(util.E2ENamespace), &bmc); err != nil {
+					return false
+				}
+				if bmc.Status.ClusterIP != "" {
+					return false
+				}
+				for _, c := range bmc.Status.Conditions {
+					if c.Type == bmcv1.ConditionReady && c.Status == metav1.ConditionFalse && c.Reason == "PrerequisitesMissing" {
+						return true
+					}
+				}
+				return false
+			}, timeout, interval).Should(BeTrue())
 		})
 
-		It("should restore SecretAvailable=True and bring the agent Pod back because both VM and Secret exist", func() {
+		It("should restore SecretAvailable=True and bring the agent Deployment back because both VM and Secret exist", func() {
 			By("re-creating the Secret")
 			Expect(k8sClient.Create(ctx, util.E2ESecret(util.E2ENamespace))).To(Succeed())
 
@@ -253,19 +300,41 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 				timeout, interval,
 			).Should(BeTrue())
 
-			By("verifying the agent Pod is re-created and running")
-			Eventually(util.PodRunningAndReady(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "agent Pod should become Running and Ready")
+			By("verifying the agent Deployment is re-created and running")
+			Eventually(util.DeploymentReadyReplicas(ctx, k8sClient, util.E2ENamespace, 1), timeout, interval).Should(BeTrue(), "agent Deployment should become ready")
+		})
+	})
+
+	Context("when the VirtualMachineBMC replica count changes", func() {
+		It("should update the agent Deployment replicas", func() {
+			By("updating the VirtualMachineBMC instance count")
+			var bmc bmcv1.VirtualMachineBMC
+			Expect(k8sClient.Get(ctx, util.BMCKey(util.E2ENamespace), &bmc)).To(Succeed())
+			replicas := int32(2)
+			bmc.Spec.Instance = &replicas
+			Expect(k8sClient.Update(ctx, &bmc)).To(Succeed())
+
+			By("verifying the agent Deployment scales to the requested replica count")
+			Eventually(util.DeploymentSpecReplicas(ctx, k8sClient, util.E2ENamespace, replicas), timeout, interval).Should(BeTrue(), "agent Deployment spec should be updated")
+			Eventually(util.DeploymentReadyReplicas(ctx, k8sClient, util.E2ENamespace, replicas), timeout, interval).Should(BeTrue(), "agent Deployment should have the requested ready replicas")
+
+			By("restoring the default replica count")
+			Expect(k8sClient.Get(ctx, util.BMCKey(util.E2ENamespace), &bmc)).To(Succeed())
+			defaultReplicas := int32(1)
+			bmc.Spec.Instance = &defaultReplicas
+			Expect(k8sClient.Update(ctx, &bmc)).To(Succeed())
+			Eventually(util.DeploymentReadyReplicas(ctx, k8sClient, util.E2ENamespace, defaultReplicas), timeout, interval).Should(BeTrue(), "agent Deployment should scale back to one replica")
 		})
 	})
 
 	Context("when the Secret is modified", func() {
-		It("should delete the agent Pod and let the controller recreate it", func() {
-			By("verifying the agent Pod is running before the change")
-			Eventually(util.PodRunningAndReady(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "agent Pod should become Running and Ready")
+		It("should roll out the agent Deployment", func() {
+			By("verifying the agent Deployment is ready before the change")
+			Eventually(util.DeploymentReadyReplicas(ctx, k8sClient, util.E2ENamespace, 1), timeout, interval).Should(BeTrue(), "agent Deployment should become ready")
 
-			var podBefore corev1.Pod
-			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &podBefore)).To(Succeed())
-			originalUID := podBefore.UID
+			var deploymentBefore appsv1.Deployment
+			Expect(k8sClient.Get(ctx, util.AgentDeploymentKey(util.E2ENamespace), &deploymentBefore)).To(Succeed())
+			originalRestartAt := deploymentBefore.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"]
 
 			By("modifying the Secret")
 			secret := &corev1.Secret{}
@@ -273,17 +342,18 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			secret.Data["password"] = []byte("new-password")
 			Expect(k8sClient.Update(ctx, secret)).To(Succeed())
 
-			By("verifying the controller reacted: pod is removed and/or recreated with new UID")
+			By("verifying the controller reacted by updating the rollout restart annotation")
 			Eventually(func() bool {
-				var pod corev1.Pod
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &pod); err != nil {
-					return errors.IsNotFound(err)
+				var deployment appsv1.Deployment
+				if err := k8sClient.Get(ctx, util.AgentDeploymentKey(util.E2ENamespace), &deployment); err != nil {
+					return false
 				}
-				return pod.UID != originalUID
-			}, timeout, interval).Should(BeTrue(), "agent Pod should be deleted or recreated when Secret is modified")
+				restartedAt := deployment.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"]
+				return restartedAt != "" && restartedAt != originalRestartAt
+			}, timeout, interval).Should(BeTrue(), "agent Deployment should be rolled out when Secret is modified")
 
-			By("verifying the agent Pod is running after controller reconciles")
-			Eventually(util.PodRunningAndReady(ctx, k8sClient, util.E2ENamespace), timeout, interval).Should(BeTrue(), "agent Pod should become Running and Ready")
+			By("verifying the agent Deployment is ready after controller reconciles")
+			Eventually(util.DeploymentReadyReplicas(ctx, k8sClient, util.E2ENamespace, 1), timeout, interval).Should(BeTrue(), "agent Deployment should become ready")
 		})
 	})
 })
