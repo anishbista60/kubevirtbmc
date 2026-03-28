@@ -19,7 +19,6 @@ package virtualmachinebmc
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -132,83 +131,6 @@ func (r *VirtualMachineBMCReconciler) ensureRBACResources(ctx context.Context, v
 	return nil
 }
 
-func (r *VirtualMachineBMCReconciler) constructPodFromVirtualMachineBMC(virtualMachineBMC *bmcv1.VirtualMachineBMC) *corev1.Pod {
-	name := fmt.Sprintf("%s-virtbmc", virtualMachineBMC.Spec.VirtualMachineRef.Name)
-	serviceAccountName := fmt.Sprintf("%s-virtbmc", virtualMachineBMC.Spec.VirtualMachineRef.Name)
-	var secretName string
-	if virtualMachineBMC.Spec.AuthSecretRef != nil {
-		secretName = virtualMachineBMC.Spec.AuthSecretRef.Name
-	}
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Labels: map[string]string{
-				VirtualMachineBMCNameLabel: virtualMachineBMC.Name,
-				VMNameLabel:                virtualMachineBMC.Spec.VirtualMachineRef.Name,
-			},
-			Name:      name,
-			Namespace: virtualMachineBMC.Namespace,
-		},
-		Spec: corev1.PodSpec{
-			ServiceAccountName: serviceAccountName,
-			Containers: []corev1.Container{
-				{
-					Name:  virtBMCContainerName,
-					Image: fmt.Sprintf("%s:%s", r.AgentImageName, r.AgentImageTag),
-					Args: []string{
-						"--address",
-						"0.0.0.0",
-						"--ipmi-port",
-						strconv.Itoa(ipmiPort),
-						"--redfish-port",
-						strconv.Itoa(redfishPort),
-						virtualMachineBMC.Namespace,
-						virtualMachineBMC.Spec.VirtualMachineRef.Name,
-					},
-					Ports: []corev1.ContainerPort{
-						{
-							Name:          ipmiPortName,
-							ContainerPort: ipmiPort,
-							Protocol:      corev1.ProtocolUDP,
-						},
-						{
-							Name:          redfishPortName,
-							ContainerPort: redfishPort,
-							Protocol:      corev1.ProtocolTCP,
-						},
-					},
-					Env: []corev1.EnvVar{
-						{
-							Name: "BMC_USERNAME",
-							ValueFrom: &corev1.EnvVarSource{
-								SecretKeyRef: &corev1.SecretKeySelector{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: secretName,
-									},
-									Key: bmcUserKey,
-								},
-							},
-						},
-						{
-							Name: "BMC_PASSWORD",
-							ValueFrom: &corev1.EnvVarSource{
-								SecretKeyRef: &corev1.SecretKeySelector{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: secretName,
-									},
-									Key: bmcPasswordKey,
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	return pod
-}
-
 func (r *VirtualMachineBMCReconciler) constructServiceFromVirtualMachineBMC(virtualMachineBMC *bmcv1.VirtualMachineBMC) *corev1.Service {
 	name := fmt.Sprintf("%s-virtbmc", virtualMachineBMC.Spec.VirtualMachineRef.Name)
 
@@ -243,30 +165,6 @@ func (r *VirtualMachineBMCReconciler) constructServiceFromVirtualMachineBMC(virt
 	}
 
 	return svc
-}
-
-func (r *VirtualMachineBMCReconciler) deleteVirtBMCPod(ctx context.Context, virtualMachineBMC *bmcv1.VirtualMachineBMC) error {
-	log := log.FromContext(ctx)
-	podName := fmt.Sprintf("%s-virtbmc", virtualMachineBMC.Spec.VirtualMachineRef.Name)
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: virtualMachineBMC.Namespace,
-		},
-	}
-
-	if err := r.Delete(ctx, pod); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.V(1).Info("virtBMC Pod already absent", "pod", podName)
-			return nil
-		}
-
-		log.Error(err, "unable to delete virtBMC Pod", "pod", podName)
-		return err
-	}
-
-	return nil
 }
 
 func (r *VirtualMachineBMCReconciler) validateVirtualMachineExists(ctx context.Context, virtualMachineBMC *bmcv1.VirtualMachineBMC) (bool, error) {
@@ -365,6 +263,7 @@ func (r *VirtualMachineBMCReconciler) validateSecretExists(ctx context.Context, 
 //+kubebuilder:rbac:groups=bmc.kubevirt.io,resources=virtualmachinebmcs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=bmc.kubevirt.io,resources=virtualmachinebmcs/finalizers,verbs=update
 //+kubebuilder:rbac:groups="",resources=pods;services;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="apps",resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=bind
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
@@ -401,8 +300,8 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if !vmExists || !secretExists {
-		if err := r.deleteVirtBMCPod(ctx, &virtualMachineBMC); err != nil {
-			log.Error(err, "unable to delete virtBMC Pod")
+		if err := r.deleteVirtBMCDeployment(ctx, &virtualMachineBMC); err != nil {
+			log.Error(err, "unable to delete virtBMC Deployment")
 			return ctrl.Result{}, err
 		}
 	}
@@ -419,19 +318,9 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	// Prepare the virtBMC Pod
-	pod := r.constructPodFromVirtualMachineBMC(&virtualMachineBMC)
-	if err := ctrl.SetControllerReference(&virtualMachineBMC, pod, r.Scheme); err != nil {
+	if err := r.ensureVirtBMCDeployment(ctx, &virtualMachineBMC); err != nil {
 		return ctrl.Result{}, err
 	}
-
-	// Create the virtBMC Pod on the cluster
-	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
-		log.Error(err, "unable to create Pod for VirtualMachineBMC", "pod", pod)
-		return ctrl.Result{}, err
-	}
-
-	log.V(1).Info("created Pod for VirtualMachineBMC", "pod", pod)
 
 	// Prepare the virtBMC Service
 	svc := r.constructServiceFromVirtualMachineBMC(&virtualMachineBMC)
@@ -528,10 +417,10 @@ func (r *VirtualMachineBMCReconciler) findVirtualMachineBMCsForSecretAndVM(ctx c
 		case *corev1.Secret:
 			if vmBMC.Spec.AuthSecretRef != nil && vmBMC.Spec.AuthSecretRef.Name == o.GetName() {
 				vmBMCCopy := vmBMC.DeepCopy()
-				if err := r.deleteVirtBMCPod(ctx, vmBMCCopy); err != nil {
-					log.Error(err, "unable to delete virtBMC Pod during Secret change", "vmBMC", vmBMC.Name)
+				if err := r.rolloutRestartVirtBMCDeployment(ctx, vmBMCCopy); err != nil {
+					log.Error(err, "unable to restart virtBMC Deployment during Secret change", "vmBMC", vmBMC.Name)
 				}
-				log.Info("Deleted virtBMC Pod after Secret change")
+				log.Info("Restarted virtBMC deployment after Secret change")
 
 				match = true
 			}
