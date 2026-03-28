@@ -2,21 +2,19 @@ package util
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/util/json"
-	"k8s.io/apimachinery/pkg/util/yaml"
+	. "github.com/onsi/gomega"
 )
 
 const (
-	certManagerURLTmpl = "https://github.com/jetstack/cert-manager/releases/download/%s/cert-manager.yaml"
+	certManagerURLFmt      = "https://github.com/jetstack/cert-manager/releases/download/%s/cert-manager.yaml"
+	kubeVirtStableVersion  = "https://storage.googleapis.com/kubevirt-prow/release/kubevirt/kubevirt/stable.txt"
+	kubeVirtOperatorURLFmt = "https://github.com/kubevirt/kubevirt/releases/download/%s/kubevirt-operator.yaml"
+	kubeVirtCRURLFmt       = "https://github.com/kubevirt/kubevirt/releases/download/%s/kubevirt-cr.yaml"
 )
 
 var (
@@ -72,8 +70,78 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
+// Virtual media mount requires CDI for DataVolumes.
+func IsCDIInstalled() bool {
+	cmd := exec.Command("kubectl", "get", "crd", "datavolumes.cdi.kubevirt.io", "--no-headers", "-o", "name")
+	output, err := Run(cmd)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(output) == "customresourcedefinition.apiextensions.k8s.io/datavolumes.cdi.kubevirt.io"
+}
+
+// DeclarativeHotplugVolumes feature gate is enabled. Virtual media mount requires this gate.
+func HasDeclarativeHotplugVolumesEnabled() bool {
+	cmd := exec.Command("kubectl", "get", "kubevirt", "kubevirt", "-n", "kubevirt",
+		"-o", "jsonpath={.spec.configuration.developerConfiguration.featureGates}", "--ignore-not-found")
+	output, err := Run(cmd)
+	if err != nil || output == "" {
+		return false
+	}
+	return strings.Contains(output, "DeclarativeHotplugVolumes")
+}
+
+func VirtualMediaPrerequisitesMet() bool {
+	return IsCDIInstalled() && HasDeclarativeHotplugVolumesEnabled()
+}
+
+func IsKubeVirtInstalled() bool {
+	cmd := exec.Command("kubectl", "get", "kubevirt", "kubevirt", "-n", "kubevirt",
+		"-o", "jsonpath={.status.phase}", "--ignore-not-found")
+	output, err := Run(cmd)
+	if err != nil || output == "" {
+		return false
+	}
+	return strings.TrimSpace(output) == "Deployed"
+}
+
+func InstallKubeVirt() error {
+	cmd := exec.Command("curl", "-sL", kubeVirtStableVersion)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("get KubeVirt version: %w", err)
+	}
+	version := strings.TrimSpace(string(out))
+	if version == "" {
+		return fmt.Errorf("empty KubeVirt version from %s", kubeVirtStableVersion)
+	}
+
+	operatorURL := fmt.Sprintf(kubeVirtOperatorURLFmt, version)
+	cmd = exec.Command("kubectl", "apply", "-f", operatorURL)
+	if _, err := Run(cmd); err != nil {
+		return fmt.Errorf("apply KubeVirt operator: %w", err)
+	}
+
+	crURL := fmt.Sprintf(kubeVirtCRURLFmt, version)
+	cmd = exec.Command("kubectl", "apply", "-f", crURL)
+	if _, err := Run(cmd); err != nil {
+		return fmt.Errorf("apply KubeVirt CR: %w", err)
+	}
+
+	Eventually(func() (string, error) {
+		cmd := exec.Command("kubectl", "get", "kubevirt", "kubevirt", "-n", "kubevirt", "-o", "jsonpath={.status.phase}")
+		out, err := Run(cmd)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(out), nil
+	}, "5m", "5s").Should(Equal("Deployed"), "KubeVirt should reach Deployed phase")
+
+	return nil
+}
+
 func InstallCertManager() error {
-	url := fmt.Sprintf(certManagerURLTmpl, certManagerVersion)
+	url := fmt.Sprintf(certManagerURLFmt, certManagerVersion)
 	cmd := exec.Command("kubectl", "apply", "-f", url)
 	if _, err := Run(cmd); err != nil {
 		return err
@@ -89,7 +157,7 @@ func InstallCertManager() error {
 }
 
 func UninstallCertManager() {
-	url := fmt.Sprintf(certManagerURLTmpl, certManagerVersion)
+	url := fmt.Sprintf(certManagerURLFmt, certManagerVersion)
 	cmd := exec.Command("kubectl", "delete", "-f", url)
 	if _, err := Run(cmd); err != nil {
 		warnError(err)
@@ -101,7 +169,11 @@ func getProjectDir() (string, error) {
 	if err != nil {
 		return wd, err
 	}
-	wd = strings.Replace(wd, "/test/e2e", "", -1)
+	for _, suffix := range []string{"/test/virtbmc-controller", "/test/virtbmc-agent"} {
+		if idx := strings.Index(wd, suffix); idx != -1 {
+			return wd[:idx], nil
+		}
+	}
 	return wd, nil
 }
 
@@ -115,48 +187,4 @@ func getNonEmptyLines(output string) []string {
 	}
 
 	return res
-}
-
-func parseCRDYaml(relativePath string) (*apiextv1.CustomResourceDefinition, error) {
-	var manifest *os.File
-	var err error
-	var crd apiextv1.CustomResourceDefinition
-
-	if manifest, err = pathToOSFile(relativePath); err != nil {
-		return nil, err
-	}
-
-	decoder := yaml.NewYAMLOrJSONDecoder(manifest, 100)
-	for {
-		var out unstructured.Unstructured
-		err = decoder.Decode(&out)
-		if err != nil {
-			break
-		}
-
-		if out.GetKind() == "CustomResourceDefinition" {
-			var marshaled []byte
-			marshaled, err = out.MarshalJSON()
-			if err != nil {
-				break
-			}
-			err = json.Unmarshal(marshaled, &crd)
-			break
-		}
-	}
-
-	if err != io.EOF && err != nil {
-		return nil, err
-	}
-
-	return &crd, nil
-}
-
-func pathToOSFile(relativePath string) (*os.File, error) {
-	path, err := filepath.Abs(relativePath)
-	if err != nil {
-		return nil, err
-	}
-
-	return os.Open(path)
 }

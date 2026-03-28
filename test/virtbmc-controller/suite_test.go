@@ -1,4 +1,4 @@
-package e2e
+package virtbmccontroller
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	apiextcs "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -32,6 +32,7 @@ const (
 )
 
 var (
+	skipKubeVirtInstall           = os.Getenv("KUBEVIRT_INSTALL_SKIP") == "true"
 	skipCertManagerInstall        = os.Getenv("CERT_MANAGER_INSTALL_SKIP") == "true"
 	isCertManagerAlreadyInstalled = false
 
@@ -49,18 +50,13 @@ var (
 	}())
 
 	config    *rest.Config
-	crdClient *apiextcs.Clientset
 	k8sClient client.Client
 )
 
-// TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
-// temporary environment to validate project changes with the the purposed to be used in CI jobs.
-// The default setup requires Kind, builds/loads the Manager Docker image locally, and installs
-// CertManager.
-func TestE2E(t *testing.T) {
+func TestVirtBMCController(t *testing.T) {
 	RegisterFailHandler(Fail)
-	_, _ = fmt.Fprintf(GinkgoWriter, "Starting KubeVirtBMC end-to-end test suite\n")
-	RunSpecs(t, "E2E Suite")
+	_, _ = fmt.Fprintf(GinkgoWriter, "Starting KubeVirtBMC controller E2E test suite\n")
+	RunSpecs(t, "VirtBMC Controller E2E Suite")
 }
 
 var _ = BeforeSuite(func() {
@@ -73,32 +69,20 @@ var _ = BeforeSuite(func() {
 	By("creating the clientsets")
 	config, err = getClientConfig()
 	Expect(err).ToNot(HaveOccurred())
-	crdClient, err = apiextcs.NewForConfig(config)
-	Expect(err).ToNot(HaveOccurred())
 	Expect(kubevirtv1.AddToScheme(scheme.Scheme)).To(Succeed())
 	Expect(bmcv1.AddToScheme(scheme.Scheme)).To(Succeed())
 	k8sClient, err = client.New(config, client.Options{Scheme: scheme.Scheme})
 	Expect(err).ToNot(HaveOccurred())
 
-	By("creating the VirtualMachine CRD")
-	err = util.CreateOrUpdateCRD(crdClient, "../../config/kubevirt-crd/kubevirt.io_virtualmachines.yaml")
-	Expect(err).ToNot(HaveOccurred())
-	Eventually(func() bool {
-		crd, err := crdClient.ApiextensionsV1().CustomResourceDefinitions().Get(
-			context.TODO(),
-			"virtualmachines.kubevirt.io",
-			metav1.GetOptions{},
-		)
-		if err != nil {
-			return false
+	if !skipKubeVirtInstall {
+		By("installing KubeVirt (before cert-manager so VMs can run in e2e)")
+		if !util.IsKubeVirtInstalled() {
+			err = util.InstallKubeVirt()
+			Expect(err).ToNot(HaveOccurred())
+		} else {
+			_, _ = fmt.Fprintf(GinkgoWriter, "WARNING: KubeVirt is already installed. Skipping installation...\n")
 		}
-		for _, cond := range crd.Status.Conditions {
-			if cond.Type == apiextv1.Established && cond.Status == apiextv1.ConditionTrue {
-				return true
-			}
-		}
-		return false
-	}, timeout, interval).Should(BeTrue())
+	}
 
 	if !skipCertManagerInstall {
 		By("checking if cert-manager is installed already")
@@ -119,20 +103,38 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
-	var err error
-
+	// Delete test resources and undeploy the controller-manager; KubeVirt and cert-manager base install remain.
+	if k8sClient != nil {
+		ctx := context.Background()
+		objs := []client.Object{
+			&kubevirtv1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: util.E2EVMName, Namespace: util.E2ENamespace}},
+			&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: util.E2ESecretName, Namespace: util.E2ENamespace}},
+			&bmcv1.VirtualMachineBMC{ObjectMeta: metav1.ObjectMeta{Name: util.E2EBMCName, Namespace: util.E2ENamespace}},
+		}
+		for _, obj := range objs {
+			err := k8sClient.Delete(ctx, obj)
+			if err != nil && !apierrors.IsNotFound(err) {
+				Expect(err).ToNot(HaveOccurred(), "delete %s/%s", obj.GetNamespace(), obj.GetName())
+			}
+		}
+		By("waiting for test resources to be gone")
+		Eventually(func() bool {
+			var vm kubevirtv1.VirtualMachine
+			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Namespace: util.E2ENamespace, Name: util.E2EVMName}, &vm))
+		}, timeout, interval).Should(BeTrue(), "VirtualMachine %s/%s should be deleted", util.E2ENamespace, util.E2EVMName)
+		Eventually(func() bool {
+			var secret corev1.Secret
+			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Namespace: util.E2ENamespace, Name: util.E2ESecretName}, &secret))
+		}, timeout, interval).Should(BeTrue(), "Secret %s/%s should be deleted", util.E2ENamespace, util.E2ESecretName)
+		Eventually(func() bool {
+			var bmc bmcv1.VirtualMachineBMC
+			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKey{Namespace: util.E2ENamespace, Name: util.E2EBMCName}, &bmc))
+		}, timeout, interval).Should(BeTrue(), "VirtualMachineBMC %s/%s should be deleted", util.E2ENamespace, util.E2EBMCName)
+	}
 	By("undeploying the controller-manager")
 	cmd := exec.Command("make", "undeploy")
-	_, _ = util.Run(cmd)
-
-	if !skipCertManagerInstall && !isCertManagerAlreadyInstalled {
-		_, _ = fmt.Fprintf(GinkgoWriter, "Uninstalling cert-manager...\n")
-		util.UninstallCertManager()
-	}
-
-	By("deleting VirtualMachine CRD")
-	err = util.DeleteCRD(crdClient, "../../config/kubevirt-crd/kubevirt.io_virtualmachines.yaml")
-	Expect(err).ToNot(HaveOccurred())
+	_, err := util.Run(cmd)
+	Expect(err).ToNot(HaveOccurred(), "make undeploy should succeed")
 })
 
 func getClientConfig() (*rest.Config, error) {
