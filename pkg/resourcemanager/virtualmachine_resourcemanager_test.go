@@ -25,6 +25,8 @@ const (
 	testImageSizeBytes = int64(1 << 30) // 1 GiB = 1073741824
 )
 
+var testImageSizePadded = util.StorageWithOverhead(testImageSizeBytes, dataVolumeStorageOverhead)
+
 type fakeVirtualMedia struct {
 	called   bool
 	imageURL string
@@ -254,7 +256,7 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 			},
 			expectedDV: builder.NewDataVolumeBuilder(testNamespace, testVMName).
 				WithHTTPSource(imageURL).
-				WithStorage(testImageSizeBytes).Build(),
+				WithStorage(testImageSizePadded).Build(),
 			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithTemplate().
 				WithCDRomDisk("cdrom", nil).
@@ -313,7 +315,7 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 			},
 			expectedDV: builder.NewDataVolumeBuilder(testNamespace, testVMName).
 				WithHTTPSource(imageURL).
-				WithStorage(testImageSizeBytes).Build(),
+				WithStorage(testImageSizePadded).Build(),
 			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithTemplate().
 				WithCDRomDisk("cdrom", nil).

@@ -22,6 +22,10 @@ const (
 	defaultManagerName      = "Manager"
 	defaultVirtualMediaId   = "CD1"
 	defaultVirtualMediaName = "Virtual Media"
+
+	// dataVolumeStorageOverhead adds 15% to the requested storage size to account for
+	// CDI filesystem overhead in the scratch PVC used during import.
+	dataVolumeStorageOverhead = 0.10
 )
 
 var (
@@ -200,7 +204,7 @@ func (m *VirtualMachineResourceManager) InsertMedia(imageURL string) error {
 	}
 
 	// Create DataVolume
-	dv := util.ConstructDataVolume(m.namespace, m.name, imageURL, imageSize)
+	dv := util.ConstructDataVolume(m.namespace, m.name, imageURL, util.StorageWithOverhead(imageSize, dataVolumeStorageOverhead))
 	_, err = m.cdiClient.CdiV1beta1().DataVolumes(m.namespace).Create(m.ctx, dv, metav1.CreateOptions{})
 	if err != nil {
 		return err

@@ -72,6 +72,10 @@ func ConstructDataVolume(namespace, name, url string, size int64) *cdiv1.DataVol
 	}
 }
 
+func StorageWithOverhead(size int64, overheadFactor float64) int64 {
+	return size + int64(float64(size)*overheadFactor)
+}
+
 func GetCdromDisk(disks []kubevirtv1.Disk) (*kubevirtv1.Disk, error) {
 	for i := range disks {
 		if disks[i].CDRom != nil {
