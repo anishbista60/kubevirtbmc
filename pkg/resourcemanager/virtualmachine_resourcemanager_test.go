@@ -373,7 +373,7 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 			shouldError: false,
 		},
 		{
-			name:         "Insert media into a virtual machine who already has media inserted should fail",
+			name:         "Insert media retry when DataVolume already exists and already attached should succeed without duplicate volumes",
 			imageURL:     imageURL,
 			virtualMedia: &fakeVirtualMedia{},
 			dv: builder.NewDataVolumeBuilder(testNamespace, testVMName).
@@ -391,9 +391,15 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 						},
 					},
 				}).Build(),
+			expectedVirtualMedia: &fakeVirtualMedia{
+				called:   true,
+				imageURL: imageURL,
+				inserted: true,
+			},
 			expectedDV: builder.NewDataVolumeBuilder(testNamespace, testVMName).
 				WithHTTPSource(imageURL).
-				WithStorage(testImageSizeBytes).Build(),
+				WithStorage(testImageSizeBytes).
+				WithAnnotation("cdi.kubevirt.io/storage.bind.immediate.requested", "").Build(),
 			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				WithTemplate().
 				WithCDRomDisk("cdrom", nil).
@@ -406,7 +412,40 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 						},
 					},
 				}).Build(),
-			shouldError: true,
+			shouldError: false,
+		},
+		{
+			name:         "Insert media retry when DataVolume already exists but not yet attached should succeed",
+			imageURL:     imageURL,
+			virtualMedia: &fakeVirtualMedia{},
+			dv: builder.NewDataVolumeBuilder(testNamespace, testVMName).
+				WithHTTPSource(imageURL).
+				WithStorage(testImageSizeBytes).Build(),
+			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithTemplate().
+				WithCDRomDisk("cdrom", nil).Build(),
+			expectedVirtualMedia: &fakeVirtualMedia{
+				called:   true,
+				imageURL: imageURL,
+				inserted: true,
+			},
+			expectedDV: builder.NewDataVolumeBuilder(testNamespace, testVMName).
+				WithHTTPSource(imageURL).
+				WithStorage(testImageSizeBytes).
+				WithAnnotation("cdi.kubevirt.io/storage.bind.immediate.requested", "").Build(),
+			expectedVM: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
+				WithTemplate().
+				WithCDRomDisk("cdrom", nil).
+				WithVolumes(kubevirtv1.Volume{
+					Name: "cdrom",
+					VolumeSource: kubevirtv1.VolumeSource{
+						DataVolume: &kubevirtv1.DataVolumeSource{
+							Name:         testVMName,
+							Hotpluggable: true,
+						},
+					},
+				}).Build(),
+			shouldError: false,
 		},
 	}
 

@@ -204,6 +204,11 @@ func (m *VirtualMachineResourceManager) InsertMedia(imageURL string) error {
 		return err
 	}
 
+	// Delete existing DataVolume if present.
+	if err := m.cdiClient.CdiV1beta1().DataVolumes(m.namespace).Delete(m.ctx, m.name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+
 	// Create DataVolume
 	dv := util.ConstructDataVolume(m.namespace, m.name, imageURL, imageSize)
 	_, err = m.cdiClient.CdiV1beta1().DataVolumes(m.namespace).Create(m.ctx, dv, metav1.CreateOptions{})
@@ -211,17 +216,20 @@ func (m *VirtualMachineResourceManager) InsertMedia(imageURL string) error {
 		return err
 	}
 
-	// Attach DataVolume to VirtualMachine
-	volume := kubevirtv1.Volume{
-		Name: cdromDisk.Name,
-		VolumeSource: kubevirtv1.VolumeSource{
-			DataVolume: &kubevirtv1.DataVolumeSource{
-				Name:         dv.Name,
-				Hotpluggable: true,
+	// Attach DataVolume to VirtualMachine only if not already attached.
+	if !slices.ContainsFunc(vm.Spec.Template.Spec.Volumes, func(v kubevirtv1.Volume) bool {
+		return v.Name == cdromDisk.Name
+	}) {
+		vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, kubevirtv1.Volume{
+			Name: cdromDisk.Name,
+			VolumeSource: kubevirtv1.VolumeSource{
+				DataVolume: &kubevirtv1.DataVolumeSource{
+					Name:         dv.Name,
+					Hotpluggable: true,
+				},
 			},
-		},
+		})
 	}
-	vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, volume)
 
 	if _, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
 		Update(m.ctx, vm, metav1.UpdateOptions{}); err != nil {
