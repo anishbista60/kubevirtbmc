@@ -116,6 +116,16 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					Equal(""),
 				))
 			})
+
+			It("should set boot device to cdrom", func() {
+				out, err := runIPMIInCluster(ctx, config, ns, ipmiReq("chassis", "bootdev", "cdrom"))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(out).To(SatisfyAny(
+					ContainSubstring("Set Boot Device"),
+					ContainSubstring("Boot"),
+					Equal(""),
+				))
+			})
 		})
 	})
 
@@ -214,6 +224,16 @@ var _ = Describe("Agent e2e", Ordered, func() {
 
 			It("should set boot to disk", func() {
 				body := `{"Boot":{"BootSourceOverrideTarget":"Hdd","BootSourceOverrideEnabled":"Once"}}`
+				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.TrimSpace(out)).To(SatisfyAny(
+					ContainSubstring("200"),
+					ContainSubstring("204"),
+				))
+			})
+
+			It("should set boot to Cd", func() {
+				body := `{"Boot":{"BootSourceOverrideTarget":"Cd","BootSourceOverrideEnabled":"Once"}}`
 				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(strings.TrimSpace(out)).To(SatisfyAny(
