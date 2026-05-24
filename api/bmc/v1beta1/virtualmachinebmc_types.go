@@ -35,6 +35,17 @@ type VirtualMachineBMCSpec struct {
 
 	// Reference to the Secret containing IPMI/Redfish credentials.
 	AuthSecretRef *corev1.LocalObjectReference `json:"authSecretRef,omitempty"`
+
+	// IPMI configures the IPMI simulator.
+	// +optional
+	IPMI *IPMISpec `json:"ipmi,omitempty"`
+}
+
+// IPMISpec defines the IPMI-specific configuration.
+type IPMISpec struct {
+	// Enabled toggles the IPMI simulator.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // VirtualMachineBMCStatus defines the observed state of VirtualMachineBMC.

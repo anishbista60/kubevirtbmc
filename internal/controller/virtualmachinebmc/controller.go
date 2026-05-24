@@ -146,6 +146,9 @@ func (r *VirtualMachineBMCReconciler) constructPodFromVirtualMachineBMC(virtualM
 				VirtualMachineBMCNameLabel: virtualMachineBMC.Name,
 				VMNameLabel:                virtualMachineBMC.Spec.VirtualMachineRef.Name,
 			},
+			Annotations: map[string]string{
+				EnableIPMIAnnotation: strconv.FormatBool(specIPMIEnabled(&virtualMachineBMC.Spec)),
+			},
 			Name:      name,
 			Namespace: virtualMachineBMC.Namespace,
 		},
@@ -155,28 +158,36 @@ func (r *VirtualMachineBMCReconciler) constructPodFromVirtualMachineBMC(virtualM
 				{
 					Name:  virtBMCContainerName,
 					Image: fmt.Sprintf("%s:%s", r.AgentImageName, r.AgentImageTag),
-					Args: []string{
-						"--address",
-						"0.0.0.0",
-						"--ipmi-port",
-						strconv.Itoa(ipmiPort),
-						"--redfish-port",
-						strconv.Itoa(redfishPort),
-						virtualMachineBMC.Namespace,
-						virtualMachineBMC.Spec.VirtualMachineRef.Name,
-					},
-					Ports: []corev1.ContainerPort{
-						{
-							Name:          ipmiPortName,
-							ContainerPort: ipmiPort,
-							Protocol:      corev1.ProtocolUDP,
-						},
-						{
-							Name:          redfishPortName,
-							ContainerPort: redfishPort,
-							Protocol:      corev1.ProtocolTCP,
-						},
-					},
+					Args: func() []string {
+						args := []string{
+							"--address",
+							"0.0.0.0",
+							"--redfish-port",
+							strconv.Itoa(redfishPort),
+						}
+						if specIPMIEnabled(&virtualMachineBMC.Spec) {
+							args = append(args, "--enable-ipmi", "--ipmi-port", strconv.Itoa(ipmiPort))
+						}
+						args = append(args, virtualMachineBMC.Namespace, virtualMachineBMC.Spec.VirtualMachineRef.Name)
+						return args
+					}(),
+					Ports: func() []corev1.ContainerPort {
+						ports := []corev1.ContainerPort{
+							{
+								Name:          redfishPortName,
+								ContainerPort: redfishPort,
+								Protocol:      corev1.ProtocolTCP,
+							},
+						}
+						if specIPMIEnabled(&virtualMachineBMC.Spec) {
+							ports = append(ports, corev1.ContainerPort{
+								Name:          ipmiPortName,
+								ContainerPort: ipmiPort,
+								Protocol:      corev1.ProtocolUDP,
+							})
+						}
+						return ports
+					}(),
 					Env: []corev1.EnvVar{
 						{
 							Name: "BMC_USERNAME",
@@ -225,20 +236,25 @@ func (r *VirtualMachineBMCReconciler) constructServiceFromVirtualMachineBMC(virt
 			Selector: map[string]string{
 				VirtualMachineBMCNameLabel: virtualMachineBMC.Name,
 			},
-			Ports: []corev1.ServicePort{
-				{
-					Name:       ipmiPortName,
-					Protocol:   corev1.ProtocolUDP,
-					TargetPort: intstr.FromString(ipmiPortName),
-					Port:       IPMISvcPort,
-				},
-				{
-					Name:       redfishPortName,
-					Protocol:   corev1.ProtocolTCP,
-					TargetPort: intstr.FromString(redfishPortName),
-					Port:       RedfishSvcPort,
-				},
-			},
+			Ports: func() []corev1.ServicePort {
+				ports := []corev1.ServicePort{
+					{
+						Name:       redfishPortName,
+						Protocol:   corev1.ProtocolTCP,
+						TargetPort: intstr.FromString(redfishPortName),
+						Port:       RedfishSvcPort,
+					},
+				}
+				if specIPMIEnabled(&virtualMachineBMC.Spec) {
+					ports = append(ports, corev1.ServicePort{
+						Name:       ipmiPortName,
+						Protocol:   corev1.ProtocolUDP,
+						TargetPort: intstr.FromString(ipmiPortName),
+						Port:       IPMISvcPort,
+					})
+				}
+				return ports
+			}(),
 		},
 	}
 
@@ -359,6 +375,107 @@ func (r *VirtualMachineBMCReconciler) validateSecretExists(ctx context.Context, 
 	return true, nil
 }
 
+func (r *VirtualMachineBMCReconciler) getVirtBMCPod(ctx context.Context, virtualMachineBMC *bmcv1.VirtualMachineBMC) (*corev1.Pod, error) {
+	podName := fmt.Sprintf("%s-virtbmc", virtualMachineBMC.Spec.VirtualMachineRef.Name)
+
+	pod := &corev1.Pod{}
+	if err := r.Get(ctx, types.NamespacedName{Name: podName, Namespace: virtualMachineBMC.Namespace}, pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return pod, nil
+}
+
+func specIPMIEnabled(spec *bmcv1.VirtualMachineBMCSpec) bool {
+	return spec.IPMI != nil && spec.IPMI.Enabled != nil && *spec.IPMI.Enabled
+}
+
+func podIPMIEnabled(pod *corev1.Pod) bool {
+	val, ok := pod.Annotations[EnableIPMIAnnotation]
+	if !ok {
+		return false
+	}
+	enabled, err := strconv.ParseBool(val)
+	if err != nil {
+		return false
+	}
+	return enabled
+}
+
+func (r *VirtualMachineBMCReconciler) patchVirtBMCServicePorts(
+	ctx context.Context,
+	virtualMachineBMC *bmcv1.VirtualMachineBMC,
+) error {
+	log := log.FromContext(ctx)
+	svcName := fmt.Sprintf("%s-virtbmc", virtualMachineBMC.Spec.VirtualMachineRef.Name)
+
+	existing := &corev1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      svcName,
+		Namespace: virtualMachineBMC.Namespace,
+	}, existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	desired := r.constructServiceFromVirtualMachineBMC(virtualMachineBMC)
+
+	patch := client.MergeFrom(existing.DeepCopy())
+	existing.Spec.Ports = desired.Spec.Ports
+
+	if err := r.Patch(ctx, existing, patch); err != nil {
+		log.Error(err, "unable to patch Service ports", "svc", svcName)
+		return err
+	}
+
+	log.V(1).Info("patched Service ports in-place", "svc", svcName,
+		"ports", existing.Spec.Ports)
+	return nil
+}
+
+// reconcileIPMIChange detects a mismatch between the spec's enableIPMI flag and
+// the stamped annotation on the existing pod. When a mismatch is found it
+// deletes the stale pod (ports are immutable) and patches the Service in-place
+// (preserving ClusterIP), then requeues so the main loop recreates the pod.
+func (r *VirtualMachineBMCReconciler) reconcileIPMIChange(ctx context.Context, virtualMachineBMC *bmcv1.VirtualMachineBMC) (requeue bool, err error) {
+	log := log.FromContext(ctx)
+
+	pod, err := r.getVirtBMCPod(ctx, virtualMachineBMC)
+	if err != nil {
+		return false, err
+	}
+
+	if pod == nil {
+		return false, nil
+	}
+
+	currentHasIPMI := podIPMIEnabled(pod)
+	desiredHasIPMI := specIPMIEnabled(&virtualMachineBMC.Spec)
+
+	if currentHasIPMI == desiredHasIPMI {
+		return false, nil
+	}
+
+	log.Info("enableIPMI changed, replacing pod and patching service",
+		"currentHasIPMI", currentHasIPMI,
+		"desiredHasIPMI", desiredHasIPMI)
+
+	if err := r.deleteVirtBMCPod(ctx, virtualMachineBMC); err != nil {
+		return false, err
+	}
+
+	if err := r.patchVirtBMCServicePorts(ctx, virtualMachineBMC); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
 //+kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstances,verbs=get;list;watch;delete
 //+kubebuilder:rbac:groups=bmc.kubevirt.io,resources=virtualmachinebmcs,verbs=get;list;watch;create;update;patch;delete
@@ -413,6 +530,14 @@ func (r *VirtualMachineBMCReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			"secretExists", secretExists,
 			"authSecretRefSet", virtualMachineBMC.Spec.AuthSecretRef != nil)
 		return ctrl.Result{}, nil
+	}
+
+	deleted, err := r.reconcileIPMIChange(ctx, &virtualMachineBMC)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if deleted {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	if err := r.ensureRBACResources(ctx, &virtualMachineBMC); err != nil {
