@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiclient "kubevirt.io/client-go/containerizeddataimporter"
@@ -252,49 +253,29 @@ func (m *VirtualMachineResourceManager) GetPowerStatus() (bool, error) {
 }
 
 func (m *VirtualMachineResourceManager) PowerOn() error {
-	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
+	_, err := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
 		Get(m.ctx, m.name, metav1.GetOptions{})
-	if err != nil {
-		return err
+	if err == nil {
+		return nil
 	}
-	if vm.Spec.RunStrategy == nil {
-		running := func(b bool) *bool { return &b }(true)
-		vm.Spec.Running = running
-	} else {
-		runStrategy := func(
-			rs kubevirtv1.VirtualMachineRunStrategy,
-		) *kubevirtv1.VirtualMachineRunStrategy {
-			return &rs
-		}(kubevirtv1.RunStrategyRerunOnFailure)
-		vm.Spec.RunStrategy = runStrategy
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to get VMI %s/%s: %w", m.namespace, m.name, err)
 	}
-	if _, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Update(m.ctx, vm, metav1.UpdateOptions{}); err != nil {
-		return err
-	}
-	return nil
+	return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
+		Start(m.ctx, m.name, &kubevirtv1.StartOptions{})
 }
 
 func (m *VirtualMachineResourceManager) PowerOff() error {
-	vm, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
+	_, err := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
 		Get(m.ctx, m.name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get VMI %s/%s: %w", m.namespace, m.name, err)
 	}
-	if vm.Spec.RunStrategy == nil {
-		running := func(b bool) *bool { return &b }(false)
-		vm.Spec.Running = running
-	} else {
-		runStrategy := func(rs kubevirtv1.VirtualMachineRunStrategy) *kubevirtv1.VirtualMachineRunStrategy {
-			return &rs
-		}(kubevirtv1.RunStrategyHalted)
-		vm.Spec.RunStrategy = runStrategy
-	}
-	if _, err := m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
-		Update(m.ctx, vm, metav1.UpdateOptions{}); err != nil {
-		return err
-	}
-	return nil
+	return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
+		Stop(m.ctx, m.name, &kubevirtv1.StopOptions{})
 }
 
 func (m *VirtualMachineResourceManager) PowerCycle() error {
@@ -305,7 +286,8 @@ func (m *VirtualMachineResourceManager) PowerCycle() error {
 	if !isUp {
 		return m.PowerOn()
 	}
-	return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).Restart(m.ctx, m.name, &kubevirtv1.RestartOptions{})
+	return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
+		Restart(m.ctx, m.name, &kubevirtv1.RestartOptions{})
 }
 
 func (m *VirtualMachineResourceManager) SetBootDevice(bootDevice BootDevice) error {
