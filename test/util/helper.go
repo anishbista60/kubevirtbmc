@@ -39,6 +39,11 @@ func Run(cmd *exec.Cmd) (string, error) {
 	return string(out), nil
 }
 
+func isKVMAvailable() bool {
+	_, err := os.Stat("/dev/kvm")
+	return err == nil
+}
+
 func IsCertManagerCRDsInstalled() bool {
 	// List of common Cert Manager CRDs
 	certManagerCRDs := []string{
@@ -126,6 +131,18 @@ func InstallKubeVirt() error {
 	cmd = exec.Command("kubectl", "apply", "-f", crURL)
 	if _, err := Run(cmd); err != nil {
 		return fmt.Errorf("apply KubeVirt CR: %w", err)
+	}
+
+	// Enable emulation only when KVM is not available.
+	if !isKVMAvailable() {
+		fmt.Println("KVM not available, enabling KubeVirt useEmulation")
+		cmd = exec.Command("kubectl", "patch", "kubevirt", "kubevirt", "-n", "kubevirt", "--type=merge",
+			"-p", `{"spec":{"configuration":{"developerConfiguration":{"useEmulation":true}}}}`)
+		if _, err := Run(cmd); err != nil {
+			return fmt.Errorf("patch KubeVirt CR for useEmulation: %w", err)
+		}
+	} else {
+		fmt.Println("KVM is available, skipping useEmulation")
 	}
 
 	Eventually(func() (string, error) {
