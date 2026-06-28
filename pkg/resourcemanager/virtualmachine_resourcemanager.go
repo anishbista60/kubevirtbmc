@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiclient "kubevirt.io/client-go/containerizeddataimporter"
 	kvclient "kubevirt.io/client-go/kubevirt"
@@ -280,6 +281,22 @@ func (m *VirtualMachineResourceManager) PowerOff() error {
 		Stop(m.ctx, m.name, &kubevirtv1.StopOptions{})
 }
 
+func (m *VirtualMachineResourceManager) ForcePowerOff() error {
+	_, err := m.virtClient.KubevirtV1().VirtualMachineInstances(m.namespace).
+		Get(m.ctx, m.name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get VMI %s/%s: %w", m.namespace, m.name, err)
+	}
+	return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).Stop(
+		m.ctx,
+		m.name,
+		&kubevirtv1.StopOptions{GracePeriod: ptr.To[int64](0)},
+	)
+}
+
 func (m *VirtualMachineResourceManager) PowerCycle() error {
 	isUp, err := m.GetPowerStatus()
 	if err != nil {
@@ -290,6 +307,22 @@ func (m *VirtualMachineResourceManager) PowerCycle() error {
 	}
 	return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).
 		Restart(m.ctx, m.name, &kubevirtv1.RestartOptions{})
+}
+
+func (m *VirtualMachineResourceManager) ForcePowerCycle() error {
+	isUp, err := m.GetPowerStatus()
+	if err != nil {
+		return err
+	}
+	if !isUp {
+		return m.PowerOn()
+	}
+
+	return m.virtClient.KubevirtV1().VirtualMachines(m.namespace).Restart(
+		m.ctx,
+		m.name,
+		&kubevirtv1.RestartOptions{GracePeriodSeconds: ptr.To[int64](0)},
+	)
 }
 
 func (m *VirtualMachineResourceManager) SetBootDevice(bootDevice BootDevice) error {

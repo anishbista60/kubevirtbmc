@@ -9,9 +9,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8stesting "k8s.io/client-go/testing"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdifake "kubevirt.io/client-go/containerizeddataimporter/fake"
 	kubevirtfake "kubevirt.io/client-go/kubevirt/fake"
+	kubevirttesting "kubevirt.io/client-go/testing"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 
 	"kubevirt.io/kubevirtbmc/pkg/builder"
@@ -51,6 +53,45 @@ func (f *fakeVirtualMedia) SetVirtualMedia(imageURL string, inserted bool) {
 	f.called = true
 	f.imageURL = imageURL
 	f.inserted = inserted
+}
+
+func findPutSubresourceAction(actions []k8stesting.Action, subresource string) (k8stesting.Action, bool) {
+	for _, action := range actions {
+		if action.GetVerb() == "put" && action.GetSubresource() == subresource {
+			return action, true
+		}
+	}
+
+	return nil, false
+}
+
+func requirePutSubresourceAction(t *testing.T, actions []k8stesting.Action, subresource string) k8stesting.Action {
+	t.Helper()
+
+	action, ok := findPutSubresourceAction(actions, subresource)
+	if ok {
+		return action
+	}
+
+	require.Failf(t, "expected PUT subresource action", "subresource %q not found", subresource)
+	return nil
+}
+
+func requirePutActionOptions[T any](t *testing.T, action k8stesting.Action, subresource string) *T {
+	t.Helper()
+
+	putAction, ok := action.(kubevirttesting.PutAction[*T])
+	var expectedOptions *T
+	require.Truef(
+		t,
+		ok,
+		"expected PUT %q action to have options type %T, got action type %T",
+		subresource,
+		expectedOptions,
+		action,
+	)
+
+	return putAction.GetOptions()
 }
 
 func TestVirtualMachineResourceManager_EjectMedia(t *testing.T) {
@@ -463,28 +504,36 @@ func TestVirtualMachineResourceManager_PowerOn(t *testing.T) {
 	testCases := []struct {
 		name        string
 		vm          *kubevirtv1.VirtualMachine
+		vmi         *kubevirtv1.VirtualMachineInstance
+		expectStart bool
 		shouldError bool
 	}{
 		{
 			name:        "Power on a virtual machine that should be on should have no effect",
 			vm:          builder.NewVirtualMachineBuilder(testNamespace, testVMName).Running(true).Build(),
+			vmi:         builder.NewVirtualMachineInstanceBuilder(testNamespace, testVMName).Build(),
+			expectStart: false,
 			shouldError: false,
 		},
 		{
 			name:        "Power on a virtual machine that should be off should succeed",
 			vm:          builder.NewVirtualMachineBuilder(testNamespace, testVMName).Running(false).Build(),
+			expectStart: true,
 			shouldError: false,
 		},
 		{
 			name: "Power on a virtual machine whose RunStrategy is set to RerunOnFailure should have no effect",
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				RunStrategy(kubevirtv1.RunStrategyRerunOnFailure).Build(),
+			vmi:         builder.NewVirtualMachineInstanceBuilder(testNamespace, testVMName).Build(),
+			expectStart: false,
 			shouldError: false,
 		},
 		{
 			name: "Power on a virtual machine whose RunStrategy is set to Halted should succeed",
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
 				RunStrategy(kubevirtv1.RunStrategyHalted).Build(),
+			expectStart: true,
 			shouldError: false,
 		},
 	}
@@ -492,6 +541,10 @@ func TestVirtualMachineResourceManager_PowerOn(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeVirtClient := kubevirtfake.NewSimpleClientset(tc.vm)
+			if tc.vmi != nil {
+				err := fakeVirtClient.Tracker().Add(tc.vmi)
+				require.NoError(t, err, "Mock resource should add into fake client tracker")
+			}
 
 			vmrm := &VirtualMachineResourceManager{
 				ctx:        context.TODO(),
@@ -506,6 +559,18 @@ func TestVirtualMachineResourceManager_PowerOn(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+
+			var startOptions *kubevirtv1.StartOptions
+			if startAction, ok := findPutSubresourceAction(fakeVirtClient.Actions(), "start"); ok {
+				startOptions = requirePutActionOptions[kubevirtv1.StartOptions](t, startAction, "start")
+			}
+
+			if tc.expectStart {
+				require.NotNil(t, startOptions)
+				require.False(t, startOptions.Paused)
+			} else {
+				require.Nil(t, startOptions)
+			}
 		})
 	}
 }
@@ -561,6 +626,30 @@ func TestVirtualMachineResourceManager_PowerOff(t *testing.T) {
 	}
 }
 
+func TestVirtualMachineResourceManager_ForcePowerOff(t *testing.T) {
+	fakeVirtClient := kubevirtfake.NewSimpleClientset(
+		builder.NewVirtualMachineBuilder(testNamespace, testVMName).Ready(true).Build(),
+	)
+	err := fakeVirtClient.Tracker().Add(builder.NewVirtualMachineInstanceBuilder(testNamespace, testVMName).Build())
+	require.NoError(t, err, "Mock resource should add into fake client tracker")
+
+	vmrm := &VirtualMachineResourceManager{
+		ctx:        context.TODO(),
+		virtClient: fakeVirtClient,
+		namespace:  testNamespace,
+		name:       testVMName,
+	}
+
+	err = vmrm.ForcePowerOff()
+	require.NoError(t, err)
+
+	stopAction := requirePutSubresourceAction(t, fakeVirtClient.Actions(), "stop")
+
+	stopOptions := requirePutActionOptions[kubevirtv1.StopOptions](t, stopAction, "stop")
+	require.NotNil(t, stopOptions.GracePeriod)
+	require.Zero(t, *stopOptions.GracePeriod)
+}
+
 func TestVirtualMachineResourceManager_PowerCycle(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -603,6 +692,61 @@ func TestVirtualMachineResourceManager_PowerCycle(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+
+			expectedSubresource := "start"
+			if tc.vmi != nil {
+				expectedSubresource = "restart"
+			}
+			requirePutSubresourceAction(t, fakeVirtClient.Actions(), expectedSubresource)
+		})
+	}
+}
+
+func TestVirtualMachineResourceManager_ForcePowerCycle(t *testing.T) {
+	testCases := []struct {
+		name                string
+		vm                  *kubevirtv1.VirtualMachine
+		vmi                 *kubevirtv1.VirtualMachineInstance
+		expectedSubresource string
+	}{
+		{
+			name:                "Force power cycle a running virtual machine should trigger immediate VM restart",
+			vm:                  builder.NewVirtualMachineBuilder(testNamespace, testVMName).Ready(true).Build(),
+			vmi:                 builder.NewVirtualMachineInstanceBuilder(testNamespace, testVMName).Build(),
+			expectedSubresource: "restart",
+		},
+		{
+			name:                "Force power cycle a halted virtual machine should trigger VM start",
+			vm:                  builder.NewVirtualMachineBuilder(testNamespace, testVMName).Build(),
+			expectedSubresource: "start",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeVirtClient := kubevirtfake.NewSimpleClientset(tc.vm)
+			if tc.vmi != nil {
+				err := fakeVirtClient.Tracker().Add(tc.vmi)
+				require.NoError(t, err, "Mock resource should add into fake client tracker")
+			}
+
+			vmrm := &VirtualMachineResourceManager{
+				ctx:        context.TODO(),
+				virtClient: fakeVirtClient,
+				namespace:  testNamespace,
+				name:       testVMName,
+			}
+
+			err := vmrm.ForcePowerCycle()
+			require.NoError(t, err)
+
+			powerAction := requirePutSubresourceAction(t, fakeVirtClient.Actions(), tc.expectedSubresource)
+
+			if tc.expectedSubresource == "restart" {
+				restartOptions := requirePutActionOptions[kubevirtv1.RestartOptions](t, powerAction, "restart")
+				require.NotNil(t, restartOptions.GracePeriodSeconds)
+				require.Zero(t, *restartOptions.GracePeriodSeconds)
+			}
 		})
 	}
 }
