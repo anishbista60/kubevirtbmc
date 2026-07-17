@@ -448,6 +448,12 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				))
 			})
 
+			It("should power off the VM", func() {
+				_, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Systems/1/Actions/ComputerSystem.Reset", `{"ResetType":"ForceOff"}`))
+				Expect(err).NotTo(HaveOccurred())
+				waitForVMIDeleted(ctx, k8sClient, ns)
+			})
+
 			It("should accept InsertMedia action", func() {
 				body := `{"Image":"https://releases.ubuntu.com/noble/ubuntu-24.04.3-live-server-amd64.iso","Inserted":true}`
 				out, err := runCurlRedfish(ctx, config, ns, redfishSession("POST", "/Managers/BMC/VirtualMedia/CD1/Actions/VirtualMedia.InsertMedia", body))
@@ -458,11 +464,34 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				))
 			})
 
+			It("should create a DataVolume after InsertMedia", func() {
+				verifyDataVolumeExists(ctx, k8sClient, ns, agentVMName)
+			})
+
+			It("should update the VM spec volume list after InsertMedia", func() {
+				verifyVMHasDataVolumeVolume(ctx, k8sClient, ns, agentVMName, agentVMName)
+			})
+
 			It("should return virtual media status after insert attempt", func() {
 				out, err := runCurlRedfish(ctx, config, ns, redfishSession("GET", "/Managers/BMC/VirtualMedia/CD1", ""))
 				Expect(err).NotTo(HaveOccurred())
 				Expect(out).To(ContainSubstring("VirtualMedia"))
 				Expect(out).To(ContainSubstring("CD1"))
+			})
+
+			It("should set boot to Cd and verify CDROM becomes boot index 1", func() {
+				body := `{"Boot":{"BootSourceOverrideTarget":"Cd","BootSourceOverrideEnabled":"Once"}}`
+				out, err := runCurlRedfish(ctx, config, ns, redfishSession("PATCH", "/Systems/1", body))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.TrimSpace(out)).To(SatisfyAny(
+					ContainSubstring("200"),
+					ContainSubstring("204"),
+				))
+				// CD: cdroms first, then regular disks, then interfaces
+				verifyVMBootOrder(ctx, k8sClient, ns,
+					map[int]uint{0: 2, 1: 1}, // disks: containerdisk=2, cdrom=1
+					map[int]uint{0: 3},       // interface=3
+				)
 			})
 
 			It("should accept EjectMedia action", func() {
@@ -473,6 +502,15 @@ var _ = Describe("Agent e2e", Ordered, func() {
 					ContainSubstring("204"),
 				))
 			})
+
+			It("should remove the volume entry from VM spec after EjectMedia", func() {
+				verifyVMHasNoDataVolumeVolume(ctx, k8sClient, ns, agentVMName)
+			})
+
+			It("should delete the DataVolume after EjectMedia", func() {
+				verifyDataVolumeDeleted(ctx, k8sClient, ns, agentVMName)
+			})
 		})
 	})
+
 })
