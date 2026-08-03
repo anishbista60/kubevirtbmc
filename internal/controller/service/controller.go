@@ -127,6 +127,9 @@ func (s *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	prevClusterIP := virtualMachineBMC.Status.ClusterIP
+	prevLoadBalancerIP := virtualMachineBMC.Status.LoadBalancerIP
+
 	status, svcType := s.checkServiceReadiness(ctx, &svc, &virtualMachineBMC)
 
 	condition := metav1.Condition{
@@ -135,24 +138,30 @@ func (s *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		Reason:  bmcv1.ConditionNotReady,
 		Message: status.Message,
 	}
+	if status.Ready {
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = bmcv1.ConditionReady
+	}
+
+	conditionChanged := meta.SetStatusCondition(&virtualMachineBMC.Status.Conditions, condition)
+	ipChanged := virtualMachineBMC.Status.ClusterIP != prevClusterIP ||
+		virtualMachineBMC.Status.LoadBalancerIP != prevLoadBalancerIP
+
+	if conditionChanged || ipChanged {
+		if err := s.Status().Update(ctx, &virtualMachineBMC); err != nil {
+			log.Error(err, "unable to update VirtualMachineBMC status for Service")
+			return ctrl.Result{}, err
+		}
+		log.V(1).Info("updated VirtualMachineBMC status for Service", "virtualMachineBMC", virtualMachineBMC)
+	}
 
 	if !status.Ready {
 		log.V(1).Info(
 			"Service not ready yet", "serviceType", svcType, "service", svc.Name,
 		)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	} else {
-		condition.Status = metav1.ConditionTrue
-		condition.Reason = bmcv1.ConditionReady
 	}
 
-	if changed := meta.SetStatusCondition(
-		&virtualMachineBMC.Status.Conditions,
-		condition,
-	); changed {
-		return ctrl.Result{}, s.Status().Update(ctx, &virtualMachineBMC)
-	}
-	log.V(1).Info("updated VirtualMachineBMC status for Service", "virtualMachineBMC", virtualMachineBMC)
 	return ctrl.Result{}, nil
 }
 
