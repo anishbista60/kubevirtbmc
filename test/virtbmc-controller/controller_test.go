@@ -522,4 +522,42 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			}, timeout, interval).Should(BeTrue(), "Service labels/annotations should be patched in-place again on subsequent changes")
 		})
 	})
+
+	Context("when the Service is deleted out-of-band while its type stays the same", Ordered, func() {
+		It("should refresh the reported ClusterIP once the owning controller recreates the Service", func() {
+			By("recording the current Service and BMC status before deletion")
+			var svcBefore corev1.Service
+			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svcBefore)).To(Succeed())
+			Expect(svcBefore.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+
+			var bmcBefore bmcv1.VirtualMachineBMC
+			Expect(k8sClient.Get(ctx, util.BMCKey(util.E2ENamespace), &bmcBefore)).To(Succeed())
+			Expect(bmcBefore.Status.ClusterIP).To(Equal(svcBefore.Spec.ClusterIP))
+
+			By("deleting the Service directly, simulating an out-of-band deletion")
+			Expect(k8sClient.Delete(ctx, &svcBefore)).To(Succeed())
+
+			By("verifying the owning controller automatically recreates the Service with a new UID")
+			Eventually(func() bool {
+				var svc corev1.Service
+				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+					return false
+				}
+				return svc.UID != svcBefore.UID && svc.Spec.ClusterIP != ""
+			}, timeout, interval).Should(BeTrue(), "Service should be automatically recreated by the owning controller, without any manual action")
+
+			By("verifying the VirtualMachineBMC status tracks the recreated Service's ClusterIP, not the stale one")
+			Eventually(func() bool {
+				var svc corev1.Service
+				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+					return false
+				}
+				var bmc bmcv1.VirtualMachineBMC
+				if err := k8sClient.Get(ctx, util.BMCKey(util.E2ENamespace), &bmc); err != nil {
+					return false
+				}
+				return bmc.Status.ClusterIP == svc.Spec.ClusterIP
+			}, timeout, interval).Should(BeTrue(), "status.clusterIP should track the current Service's ClusterIP even when the Ready condition's message stays unchanged across the recreation")
+		})
+	})
 })

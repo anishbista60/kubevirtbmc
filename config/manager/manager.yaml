@@ -63,7 +63,9 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: controller:latest
+          - --agent-image-name=anish60/virtbmc
+          - --agent-image-tag=servicetest
+        image: controller:latestg
         name: manager
         ports: []
         securityContext:
