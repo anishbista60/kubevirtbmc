@@ -19,6 +19,7 @@ package virtualmachinebmc
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
@@ -524,6 +525,18 @@ func (r *VirtualMachineBMCReconciler) reconcileService(ctx context.Context, vmbm
 		)
 		return r.deleteVirtBMCService(ctx, vmbmc)
 	}
+
+	if !maps.Equal(existingService.Labels, svc.Labels) || !maps.Equal(existingService.Annotations, svc.Annotations) {
+		log.Info("Service labels/annotations changed, patching Service in-place", "service", serviceName)
+		patch := client.MergeFrom(existingService.DeepCopy())
+		existingService.Labels = svc.Labels
+		existingService.Annotations = svc.Annotations
+		if err := r.Patch(ctx, existingService, patch); err != nil {
+			log.Error(err, "unable to patch Service labels/annotations", "service", serviceName)
+			return err
+		}
+	}
+
 	return nil
 }
 

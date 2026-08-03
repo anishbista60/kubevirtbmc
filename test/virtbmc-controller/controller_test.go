@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmcv1 "kubevirt.io/kubevirtbmc/api/bmc/v1beta1"
+	"kubevirt.io/kubevirtbmc/internal/controller/virtualmachinebmc"
 	"kubevirt.io/kubevirtbmc/test/util"
 )
 
@@ -466,6 +467,59 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 				util.HasBMCCondition(ctx, k8sClient, util.E2ENamespace, bmcv1.ConditionReady, metav1.ConditionTrue, bmcv1.ConditionReady),
 				timeout, interval,
 			).Should(BeTrue())
+		})
+	})
+
+	Context("when the BMC Service labels and annotations are changed", Ordered, func() {
+		It("should patch the Service in-place, without requiring the Service to be manually deleted", func() {
+			By("recording the current Service UID before adding labels/annotations")
+			var svcBefore corev1.Service
+			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svcBefore)).To(Succeed())
+			Expect(svcBefore.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+
+			By("setting spec.service.labels and spec.service.annotations on the VirtualMachineBMC")
+			bmc := &bmcv1.VirtualMachineBMC{}
+			Expect(k8sClient.Get(ctx, util.BMCKey(util.E2ENamespace), bmc)).To(Succeed())
+			if bmc.Spec.Service == nil {
+				bmc.Spec.Service = &bmcv1.BMCServiceSpec{}
+			}
+			bmc.Spec.Service.Labels = map[string]string{"custom-label": "foo"}
+			bmc.Spec.Service.Annotations = map[string]string{"custom-annotation": "bar"}
+			Expect(k8sClient.Update(ctx, bmc)).To(Succeed())
+
+			By("verifying the Service is patched in-place (same UID) with the new labels and annotations")
+			Eventually(func() bool {
+				var svc corev1.Service
+				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+					return false
+				}
+				return svc.UID == svcBefore.UID &&
+					svc.Labels["custom-label"] == "foo" &&
+					svc.Annotations["custom-annotation"] == "bar"
+			}, timeout, interval).Should(BeTrue(), "Service should be patched in-place with the new labels/annotations, without being deleted")
+
+			By("verifying the base labels required for selection are preserved")
+			var svcAfterAdd corev1.Service
+			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svcAfterAdd)).To(Succeed())
+			Expect(svcAfterAdd.Labels).To(HaveKeyWithValue(virtualmachinebmc.VirtualMachineBMCNameLabel, util.E2EBMCName))
+
+			By("changing the label/annotation values again")
+			bmc = &bmcv1.VirtualMachineBMC{}
+			Expect(k8sClient.Get(ctx, util.BMCKey(util.E2ENamespace), bmc)).To(Succeed())
+			bmc.Spec.Service.Labels = map[string]string{"custom-label": "baz"}
+			bmc.Spec.Service.Annotations = map[string]string{"custom-annotation": "qux"}
+			Expect(k8sClient.Update(ctx, bmc)).To(Succeed())
+
+			By("verifying the Service reflects the updated values, still without a UID change")
+			Eventually(func() bool {
+				var svc corev1.Service
+				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+					return false
+				}
+				return svc.UID == svcBefore.UID &&
+					svc.Labels["custom-label"] == "baz" &&
+					svc.Annotations["custom-annotation"] == "qux"
+			}, timeout, interval).Should(BeTrue(), "Service labels/annotations should be patched in-place again on subsequent changes")
 		})
 	})
 })
