@@ -26,6 +26,8 @@ const (
 	ConditionReady                   = "Ready"
 	ConditionVirtualMachineAvailable = "VirtualMachineAvailable"
 	ConditionSecretAvailable         = "SecretAvailable"
+	VirtualMachineBMCNameLabel       = "kubevirt.io/virtualmachinebmc-name"
+	VMNameLabel                      = "kubevirt.io/vm-name"
 )
 
 // VirtualMachineBMCSpec defines the desired state of VirtualMachineBMC.
