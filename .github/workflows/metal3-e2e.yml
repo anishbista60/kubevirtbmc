@@ -1,0 +1,95 @@
+name: Metal3 Ironic Integration E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "v*"
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "hack/metal3-e2e/**"
+      - "test/metal3-e2e/**"
+      - ".github/workflows/metal3-e2e.yml"
+
+jobs:
+  metal3-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      REPO: kubevirtbmc
+      MANAGER: virtbmc-controller
+      AGENT: virtbmc
+      VERSION: ${{ github.event_name == 'pull_request' && format('pr-{0}-head', github.event.number) || (github.ref_type == 'branch' && format('{0}-head', github.ref_name) || github.ref_name) }}
+      GIT_COMMIT: ${{ github.sha }}
+      KIND_CLUSTER: kvbmc-metal3-e2e
+      CERT_MANAGER_VERSION: v1.14.2
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker build manager
+        uses: docker/build-push-action@v6
+        with:
+          provenance: false
+          context: .
+          build-args: |
+            LINKFLAGS=-X main.AppVersion=${{ env.VERSION }} -X main.GitCommit=${{ env.GIT_COMMIT }}
+          file: Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.REPO }}/${{ env.MANAGER }}:${{ env.VERSION }}
+
+      - name: Docker build agent
+        uses: docker/build-push-action@v6
+        with:
+          provenance: false
+          context: .
+          build-args: |
+            LINKFLAGS=-X main.AppVersion=${{ env.VERSION }} -X main.GitCommit=${{ env.GIT_COMMIT }}
+          file: Dockerfile.virtbmc
+          push: false
+          load: true
+          tags: ${{ env.REPO }}/${{ env.AGENT }}:${{ env.VERSION }}
+
+      - name: Metal3 e2e setup (Kind + br-prov + Multus)
+        run: make metal3-e2e-setup
+
+      - name: Cache Metal3 user image
+        uses: actions/cache@v4
+        with:
+          # Consumed by cacheUserImageOnIronicHTTPD via os.TempDir(). Key covers
+          # both ways the image can change: the METAL3_USER_IMAGE_* job env
+          # overrides and the default URL/checksum constants in provision_helpers_test.go.
+          path: /tmp/metal3-user.qcow2
+          key: metal3-user-image-${{ hashFiles('test/metal3-e2e/provision_helpers_test.go') }}-${{ env.METAL3_USER_IMAGE_URL }}-${{ env.METAL3_USER_IMAGE_CHECKSUM }}
+
+      - name: Metal3 e2e tests
+        run: make metal3-e2e-test
+
+      - name: Collect diagnostics
+        if: always()
+        run: make metal3-e2e-diagnostics
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal3-e2e-diagnostics
+          path: artifacts/
+
+      - name: Metal3 e2e teardown
+        if: always()
+        run: make metal3-e2e-teardown

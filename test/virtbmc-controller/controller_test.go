@@ -25,6 +25,7 @@ const (
 	webhookServiceName      = "kubevirtbmc-webhook-service"
 	webhookServiceNamespace = "kubevirtbmc-system"
 	vmDeletionTimeout       = time.Second * 120
+	vmiFirstBootTimeout     = time.Second * 300
 )
 
 var (
@@ -110,7 +111,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 				}
 			}
 			By("waiting for the VirtualMachineInstance to reach Running phase")
-			Eventually(util.VMIRunning(ctx, k8sClient, util.E2EVMName, util.E2ENamespace), timeout, interval).Should(BeTrue(), "VMI should reach Running state")
+			Eventually(util.VMIRunning(ctx, k8sClient, util.E2EVMName, util.E2ENamespace), vmiFirstBootTimeout, interval).Should(BeTrue(), "VMI should reach Running state")
 		})
 
 		It("should allow creating a VirtualMachineBMC", func() {
@@ -394,7 +395,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 		It("should default to ClusterIP when spec.service is not set", func() {
 			By("verifying the underlying Service defaults to type ClusterIP")
 			var svc corev1.Service
-			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc)).To(Succeed())
+			Expect(k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc)).To(Succeed())
 			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
 
 			By("verifying the VirtualMachineBMC status reports only ClusterIP")
@@ -410,7 +411,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 		It("should recreate the Service as LoadBalancer and report a LoadBalancer ingress IP", func() {
 			By("recording the current ClusterIP Service before the type change")
 			var svcBefore corev1.Service
-			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svcBefore)).To(Succeed())
+			Expect(k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svcBefore)).To(Succeed())
 			Expect(svcBefore.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
 
 			By("switching the VirtualMachineBMC Service type to LoadBalancer")
@@ -422,7 +423,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			By("verifying the old ClusterIP Service is deleted and/or recreated with a new UID")
 			Eventually(func() bool {
 				var svc corev1.Service
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+				if err := k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc); err != nil {
 					return errors.IsNotFound(err)
 				}
 				return svc.UID != svcBefore.UID
@@ -431,7 +432,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			By("verifying the recreated Service has type LoadBalancer")
 			Eventually(func() bool {
 				var svc corev1.Service
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+				if err := k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc); err != nil {
 					return false
 				}
 				return svc.Spec.Type == corev1.ServiceTypeLoadBalancer
@@ -440,7 +441,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			By("waiting for cloud-provider-kind to assign a LoadBalancer ingress IP")
 			Eventually(func() bool {
 				var svc corev1.Service
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+				if err := k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc); err != nil {
 					return false
 				}
 				return len(svc.Status.LoadBalancer.Ingress) > 0 && svc.Status.LoadBalancer.Ingress[0].IP != ""
@@ -465,7 +466,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 		It("should recreate the Service as ClusterIP and clear the LoadBalancerIP when switched back", func() {
 			By("recording the current LoadBalancer Service before the type change")
 			var svcBefore corev1.Service
-			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svcBefore)).To(Succeed())
+			Expect(k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svcBefore)).To(Succeed())
 			Expect(svcBefore.Spec.Type).To(Equal(corev1.ServiceTypeLoadBalancer))
 
 			By("switching the VirtualMachineBMC Service type back to ClusterIP")
@@ -478,7 +479,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			By("verifying the LoadBalancer Service is deleted and/or recreated with a new UID")
 			Eventually(func() bool {
 				var svc corev1.Service
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+				if err := k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc); err != nil {
 					return errors.IsNotFound(err)
 				}
 				return svc.UID != svcBefore.UID
@@ -487,7 +488,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			By("verifying the recreated Service has type ClusterIP")
 			Eventually(func() bool {
 				var svc corev1.Service
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+				if err := k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc); err != nil {
 					return false
 				}
 				return svc.Spec.Type == corev1.ServiceTypeClusterIP
@@ -514,7 +515,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 		It("should patch the Service in-place, without requiring the Service to be manually deleted", func() {
 			By("recording the current Service UID before adding labels/annotations")
 			var svcBefore corev1.Service
-			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svcBefore)).To(Succeed())
+			Expect(k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svcBefore)).To(Succeed())
 			Expect(svcBefore.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
 
 			By("setting spec.service.labels and spec.service.annotations on the VirtualMachineBMC")
@@ -530,7 +531,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			By("verifying the Service is patched in-place (same UID) with the new labels and annotations")
 			Eventually(func() bool {
 				var svc corev1.Service
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+				if err := k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc); err != nil {
 					return false
 				}
 				return svc.UID == svcBefore.UID &&
@@ -540,7 +541,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 
 			By("verifying the base labels required for selection are preserved")
 			var svcAfterAdd corev1.Service
-			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svcAfterAdd)).To(Succeed())
+			Expect(k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svcAfterAdd)).To(Succeed())
 			Expect(svcAfterAdd.Labels).To(HaveKeyWithValue(bmcv1.VirtualMachineBMCNameLabel, util.E2EBMCName))
 
 			By("changing the label/annotation values again")
@@ -553,7 +554,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			By("verifying the Service reflects the updated values, still without a UID change")
 			Eventually(func() bool {
 				var svc corev1.Service
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+				if err := k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc); err != nil {
 					return false
 				}
 				return svc.UID == svcBefore.UID &&
@@ -567,7 +568,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 		It("should refresh the reported ClusterIP once the owning controller recreates the Service", func() {
 			By("recording the current Service and BMC status before deletion")
 			var svcBefore corev1.Service
-			Expect(k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svcBefore)).To(Succeed())
+			Expect(k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svcBefore)).To(Succeed())
 			Expect(svcBefore.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
 
 			var bmcBefore bmcv1.VirtualMachineBMC
@@ -580,7 +581,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			By("verifying the owning controller automatically recreates the Service with a new UID")
 			Eventually(func() bool {
 				var svc corev1.Service
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+				if err := k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc); err != nil {
 					return false
 				}
 				return svc.UID != svcBefore.UID && svc.Spec.ClusterIP != ""
@@ -589,7 +590,7 @@ var _ = Describe("KubeVirtBMC controller manager", Ordered, func() {
 			By("verifying the VirtualMachineBMC status tracks the recreated Service's ClusterIP, not the stale one")
 			Eventually(func() bool {
 				var svc corev1.Service
-				if err := k8sClient.Get(ctx, util.AgentPodKey(util.E2ENamespace), &svc); err != nil {
+				if err := k8sClient.Get(ctx, util.AgentServiceKey(util.E2ENamespace), &svc); err != nil {
 					return false
 				}
 				var bmc bmcv1.VirtualMachineBMC
