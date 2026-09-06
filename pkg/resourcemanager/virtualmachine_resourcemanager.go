@@ -233,12 +233,12 @@ func (m *VirtualMachineResourceManager) InsertMedia(ctx context.Context, imageUR
 			if bmc.Spec.StorageClassName != nil {
 				storageClassName = *bmc.Spec.StorageClassName
 			}
-			if bmc.Spec.VirtualMedia != nil {
-				if bmc.Spec.VirtualMedia.InsecureSkipVerify != nil {
-					insecureSkipVerify = *bmc.Spec.VirtualMedia.InsecureSkipVerify
+			if bmc.Spec.Redfish != nil && bmc.Spec.Redfish.VirtualMedia != nil {
+				if bmc.Spec.Redfish.VirtualMedia.InsecureSkipVerify != nil {
+					insecureSkipVerify = *bmc.Spec.Redfish.VirtualMedia.InsecureSkipVerify
 				}
-				if bmc.Spec.VirtualMedia.CABundleConfigMapRef != nil {
-					caBundleConfigMap = bmc.Spec.VirtualMedia.CABundleConfigMapRef.Name
+				if bmc.Spec.Redfish.VirtualMedia.CABundleConfigMapRef != nil {
+					caBundleConfigMap = bmc.Spec.Redfish.VirtualMedia.CABundleConfigMapRef.Name
 				}
 			}
 		}

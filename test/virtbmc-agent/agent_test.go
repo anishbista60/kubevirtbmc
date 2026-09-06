@@ -1095,7 +1095,7 @@ var _ = Describe("Agent e2e", Ordered, func() {
 				bmc := &bmcv1.VirtualMachineBMC{}
 				Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: agentBMCName}, bmc)).To(Succeed())
 				orig := bmc.DeepCopy()
-				bmc.Spec.VirtualMedia = vm
+				bmc.Spec.Redfish = &bmcv1.RedfishSpec{VirtualMedia: vm}
 				Expect(k8sClient.Patch(ctx, bmc, client.MergeFrom(orig))).To(Succeed())
 			}
 

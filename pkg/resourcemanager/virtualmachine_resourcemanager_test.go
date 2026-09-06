@@ -407,7 +407,7 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 			shouldError: false,
 		},
 		{
-			name:         "Insert media with a VirtualMachineBMC.Spec.VirtualMedia.InsecureSkipVerify set should mark the DataVolume insecure",
+			name:         "Insert media with a VirtualMachineBMC.Spec.Redfish.VirtualMedia.InsecureSkipVerify set should mark the DataVolume insecure",
 			imageURL:     imageURL,
 			virtualMedia: &fakeVirtualMedia{},
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
@@ -415,7 +415,9 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 				WithCDRomDisk("cdrom", nil).Build(),
 			bmc: func() *bmcv1.VirtualMachineBMC {
 				bmc := newTestBMC()
-				bmc.Spec.VirtualMedia = &bmcv1.VirtualMediaSpec{InsecureSkipVerify: util.Ptr(true)}
+				bmc.Spec.Redfish = &bmcv1.RedfishSpec{
+					VirtualMedia: &bmcv1.VirtualMediaSpec{InsecureSkipVerify: util.Ptr(true)},
+				}
 				return bmc
 			}(),
 			expectedVirtualMedia: &fakeVirtualMedia{
@@ -443,7 +445,7 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 			shouldError: false,
 		},
 		{
-			name:         "Insert media with a VirtualMachineBMC.Spec.VirtualMedia.CABundleConfigMapRef set should reference the ConfigMap on the DataVolume",
+			name:         "Insert media with a VirtualMachineBMC.Spec.Redfish.VirtualMedia.CABundleConfigMapRef set should reference the ConfigMap on the DataVolume",
 			imageURL:     imageURL,
 			virtualMedia: &fakeVirtualMedia{},
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
@@ -451,8 +453,10 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 				WithCDRomDisk("cdrom", nil).Build(),
 			bmc: func() *bmcv1.VirtualMachineBMC {
 				bmc := newTestBMC()
-				bmc.Spec.VirtualMedia = &bmcv1.VirtualMediaSpec{
-					CABundleConfigMapRef: &corev1.LocalObjectReference{Name: "custom-ca"},
+				bmc.Spec.Redfish = &bmcv1.RedfishSpec{
+					VirtualMedia: &bmcv1.VirtualMediaSpec{
+						CABundleConfigMapRef: &corev1.LocalObjectReference{Name: "custom-ca"},
+					},
 				}
 				return bmc
 			}(),
@@ -485,7 +489,7 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 			shouldError: false,
 		},
 		{
-			name:         "Insert media with a VirtualMachineBMC.Spec.VirtualMedia.CABundleConfigMapRef pointing to a missing ConfigMap should fail",
+			name:         "Insert media with a VirtualMachineBMC.Spec.Redfish.VirtualMedia.CABundleConfigMapRef pointing to a missing ConfigMap should fail",
 			imageURL:     imageURL,
 			virtualMedia: &fakeVirtualMedia{},
 			vm: builder.NewVirtualMachineBuilder(testNamespace, testVMName).
@@ -493,8 +497,10 @@ func TestVirtualMachineResourceManager_InsertMedia(t *testing.T) {
 				WithCDRomDisk("cdrom", nil).Build(),
 			bmc: func() *bmcv1.VirtualMachineBMC {
 				bmc := newTestBMC()
-				bmc.Spec.VirtualMedia = &bmcv1.VirtualMediaSpec{
-					CABundleConfigMapRef: &corev1.LocalObjectReference{Name: "missing-ca"},
+				bmc.Spec.Redfish = &bmcv1.RedfishSpec{
+					VirtualMedia: &bmcv1.VirtualMediaSpec{
+						CABundleConfigMapRef: &corev1.LocalObjectReference{Name: "missing-ca"},
+					},
 				}
 				return bmc
 			}(),

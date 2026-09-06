@@ -53,6 +53,13 @@ type VirtualMachineBMCSpec struct {
 	// +optional
 	StorageClassName *string `json:"storageClassName,omitempty"`
 
+	// Redfish configures Redfish-specific behavior.
+	// +optional
+	Redfish *RedfishSpec `json:"redfish,omitempty"`
+}
+
+// RedfishSpec defines the Redfish-specific configuration.
+type RedfishSpec struct {
 	// VirtualMedia configures TLS behavior when fetching virtual media images over https.
 	// +optional
 	VirtualMedia *VirtualMediaSpec `json:"virtualMedia,omitempty"`
