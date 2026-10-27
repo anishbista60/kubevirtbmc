@@ -13,7 +13,8 @@ out to the details.
 
 KubeVirtBMC started as a SUSE Hack Week project to give KubeVirt VMs an IPMI interface so that
 [Seeder](https://github.com/harvester/seeder) and [Tinkerbell](https://tinkerbell.org) could drive them like physical
-servers. Since then it has grown into a small but complete virtual BMC:
+servers. Since then it has grown into a small but complete virtual BMC, and [Metal3](https://metal3.io)/Ironic has
+become the primary integration we test against:
 
 - **API and controller.** A `v1beta1` `VirtualMachineBMC` CRD with webhook validation. Each BMC runs as its own
   `Deployment` with a dedicated Service, ServiceAccount, and RBAC. The Service can be exposed as `ClusterIP`,
@@ -125,8 +126,11 @@ or start a [discussion](https://github.com/kubevirtbmc/kubevirtbmc/discussions).
 
 - **Scale and density.** Today it is one virtbmc Deployment per VM. For large CI fleets we want to explore a shared
   agent that serves many BMCs, and to cut per-BMC memory further.
-- **More provisioning integrations.** Run e2e suites for Tinkerbell and Seeder alongside Metal3, and validate against
-  the bare-metal managers covered by the compatibility track.
+- **Deeper Metal3 coverage.** Metal3/Ironic stays the reference integration. We want to extend the e2e suite beyond
+  provisioning to cover inspection, virtual media boot, BIOS and firmware settings, and RAID/disk handling where it
+  makes sense for a VM. That way every Ironic Redfish feature a user is likely to hit is exercised in CI.
+- **More provisioning integrations.** Add e2e suites for Tinkerbell and Seeder next to the Metal3 one, and validate
+  against the bare-metal managers covered by the compatibility track.
 - **Redfish event service.** Push power and media state changes to subscribers instead of making clients poll.
 - **Security hardening.** Credential rotation without pod restarts, finer-grained RBAC for the agent, and continued
   work towards the OpenSSF Best Practices passing level and beyond.
